@@ -1,0 +1,98 @@
+stages:
+    - build
+    - release
+
+#------------------#
+#  Debug pipeline  #
+#------------------#
+.build-script:
+    stage: build
+    script:
+        - startsection build "Build & test"
+        - cargo build
+        - cargo test
+        - endsection build
+
+build-linux:
+    stage: build
+    except:
+        - master
+    image: "rust:latest"
+    extends:
+        - .build-script
+    before_script:
+        - . ./.gitlab/support/unix.sh
+
+build-win64:
+    stage: build
+    except:
+        - master
+    tags:
+        - windows
+        - shared-windows
+        - windows-1809
+    before_script:
+        - . ./.gitlab/support/windows.ps1
+        - startsection deps "Install job dependencies"
+        - choco install -y rust-ms
+        - endsection deps
+    extends:
+        - .build-script
+
+#------------------#
+# Release pipeline #
+#------------------#
+get-version:
+    stage: build
+    image: debian:stable
+    only:
+        - master
+    script:
+        # Part 1 > extract the version line
+        # Part 2 > extract the version string itself
+        # Part 3 > remove colors
+        - grep -P 'version = "\d.\d.\d"' Cargo.toml | grep -oP '\d.\d.\d' | cat > versionfile.txt
+    artifacts:
+        paths:
+            - versionfile.txt
+
+build-release-test:
+    stage: build
+    image: "rust:latest"
+    only:
+        - master
+    before_script:
+        - . ./.gitlab/support/unix.sh
+    script:
+        - startsection build "Build release & test"
+        - cargo build --release
+        - cargo test
+        - endsection build
+
+publish:
+    stage: release
+    image: "rust:latest"
+    only:
+        - master
+    before_script:
+        - . ./.gitlab/support/unix.sh
+    script:
+        - startsection build "Push to crates.io"
+        - cargo login ${RELEASE_TOKEN}
+        - cargo publish --dry-run
+        - cargo publish
+        - endsection build
+
+create-release:
+  stage: release
+  image: registry.gitlab.com/gitlab-org/release-cli:latest
+  needs:
+    - get-version
+  only:
+    - master
+  script:
+    - PACKAGE_VERSION=$(cat versionfile.txt)
+    - echo "Creating release v${PACKAGE_VERSION}..."
+    - |
+      release-cli create --name "Release ${PACKAGE_VERSION}" --tag-name ${PACKAGE_VERSION} \
+        --assets-link "{\"name\":\"Crates.io release\",\"url\":\"https://crates.io/crates/bpx\"}" \
