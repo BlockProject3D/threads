@@ -54,7 +54,7 @@ impl UnscopedThreadManager {
     /// use bp3d_threads::ThreadPool;
     /// use bp3d_threads::UnscopedThreadManager;
     /// let manager = UnscopedThreadManager::new();
-    /// let mut pool: ThreadPool<i32, UnscopedThreadManager> = ThreadPool::new(4);
+    /// let mut pool: ThreadPool<UnscopedThreadManager, i32> = ThreadPool::new(4);
     /// assert!(pool.is_idle());
     /// pool.dispatch(&manager, |_| 12);
     /// assert!(!pool.is_idle());
@@ -92,7 +92,7 @@ mod tests {
     fn basic() {
         const N: usize = 50;
         let manager = UnscopedThreadManager::new();
-        let mut pool: ThreadPool<usize, UnscopedThreadManager> = ThreadPool::new(4);
+        let mut pool: ThreadPool<UnscopedThreadManager, usize> = ThreadPool::new(4);
         for _ in 0..N {
             pool.dispatch(&manager, |_| fibonacci_recursive(20));
         }

@@ -63,7 +63,7 @@ impl<'env, 'scope> ScopedThreadManager<'env, 'scope> {
     /// use bp3d_threads::ScopedThreadManager;
     /// crossbeam::scope(|scope| {
     ///     let manager = ScopedThreadManager::new(scope);
-    ///     let mut pool: ThreadPool<i32, ScopedThreadManager> = ThreadPool::new(4);
+    ///     let mut pool: ThreadPool<ScopedThreadManager, i32> = ThreadPool::new(4);
     ///     assert!(pool.is_idle());
     ///     pool.dispatch(&manager, |_| 12);
     ///     assert!(!pool.is_idle());
@@ -99,7 +99,7 @@ mod tests {
         let mut tasks = 0;
         crossbeam::scope(|scope| {
             let manager = ScopedThreadManager::new(scope);
-            let mut pool: ThreadPool<usize, ScopedThreadManager> = ThreadPool::new(4);
+            let mut pool: ThreadPool<ScopedThreadManager, usize> = ThreadPool::new(4);
             for _ in 0..N - 1 {
                 pool.dispatch(&manager, |_| fibonacci_recursive(20));
             }

@@ -70,7 +70,7 @@ pub trait ThreadManager<'env> {
 }
 
 /// Core thread pool.
-pub struct ThreadPool<'env, T: Send + 'static, Manager: ThreadManager<'env>> {
+pub struct ThreadPool<'env, Manager: ThreadManager<'env>, T: Send + 'static> {
     end_channel_out: Receiver<T>,
     end_channel_in: Sender<T>,
     task_channel_out: Receiver<Task<'env, T>>,
@@ -83,7 +83,7 @@ pub struct ThreadPool<'env, T: Send + 'static, Manager: ThreadManager<'env>> {
     task_id: usize,
 }
 
-impl<'env, T: Send, Manager: ThreadManager<'env>> ThreadPool<'env, T, Manager> {
+impl<'env, Manager: ThreadManager<'env>, T: Send> ThreadPool<'env, Manager, T> {
     /// Creates a new thread pool
     ///
     /// # Arguments
@@ -97,7 +97,7 @@ impl<'env, T: Send, Manager: ThreadManager<'env>> ThreadPool<'env, T, Manager> {
     /// ```
     /// use bp3d_threads::UnscopedThreadManager;
     /// use bp3d_threads::ThreadPool;
-    /// let _: ThreadPool<(), UnscopedThreadManager> = ThreadPool::new(4);
+    /// let _: ThreadPool<UnscopedThreadManager, ()> = ThreadPool::new(4);
     /// ```
     pub fn new(n_threads: usize) -> Self {
         let (end_channel_in, end_channel_out) = unbounded();
@@ -160,7 +160,7 @@ impl<'env, T: Send, Manager: ThreadManager<'env>> ThreadPool<'env, T, Manager> {
     /// use bp3d_threads::UnscopedThreadManager;
     /// use bp3d_threads::ThreadPool;
     /// let manager = UnscopedThreadManager::new();
-    /// let mut pool: ThreadPool<(), UnscopedThreadManager> = ThreadPool::new(4);
+    /// let mut pool: ThreadPool<UnscopedThreadManager, ()> = ThreadPool::new(4);
     /// pool.dispatch(&manager, |_| ());
     /// ```
     pub fn dispatch<F: FnOnce(usize) -> T + Send + 'env>(
