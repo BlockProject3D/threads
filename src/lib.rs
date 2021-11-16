@@ -28,7 +28,7 @@
 
 //! Yet another threading library intended to simplify thread pools in BP3D.
 
-#[warn(missing_docs)]
+#![warn(missing_docs)]
 
 mod thread_pool;
 

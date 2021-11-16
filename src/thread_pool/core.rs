@@ -56,7 +56,6 @@ pub trait Join {
 
 /// Trait to handle spawning generic threads.
 pub trait ThreadManager<'env> {
-
     /// The type of thread handle (must have a join() function).
     type Handle: Join;
 
@@ -85,7 +84,6 @@ pub struct ThreadPool<'env, T: Send + 'static, Manager: ThreadManager<'env>> {
 }
 
 impl<'env, T: Send, Manager: ThreadManager<'env>> ThreadPool<'env, T, Manager> {
-
     /// Creates a new thread pool
     ///
     /// # Arguments

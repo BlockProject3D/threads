@@ -78,8 +78,8 @@ impl<'env, 'scope> ScopedThreadManager<'env, 'scope> {
 
 #[cfg(test)]
 mod tests {
-    use std::ops::Deref;
     use crate::thread_pool::{ScopedThreadManager, ThreadPool};
+    use std::ops::Deref;
 
     fn fibonacci_recursive(n: usize) -> usize {
         if n == 0 {
