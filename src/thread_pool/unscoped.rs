@@ -27,11 +27,18 @@
 // SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 use std::thread::JoinHandle;
+use crate::Join;
 use crate::thread_pool::core::ThreadManager;
 
-pub struct UnscopedThreadManager
+impl Join for JoinHandle<()>
 {
+    fn join(self) -> std::thread::Result<()>
+    {
+        self.join()
+    }
 }
+
+pub struct UnscopedThreadManager();
 
 impl Default for UnscopedThreadManager
 {
@@ -45,7 +52,7 @@ impl UnscopedThreadManager
 {
     pub fn new() -> Self
     {
-        Self { }
+        Self()
     }
 }
 
@@ -84,12 +91,13 @@ mod tests
         for _ in 0..N {
             pool.dispatch(&manager, |_| fibonacci_recursive(20));
         }
+        assert!(!pool.is_empty());
+        pool.join().unwrap();
+        assert!(pool.is_empty());
         let mut tasks = 0;
-        while !pool.is_empty() {
-            if let Some(event) = pool.poll() {
-                assert_eq!(event, 6765);
-                tasks += 1;
-            }
+        while let Some(event) = pool.poll() {
+            assert_eq!(event, 6765);
+            tasks += 1;
         }
         assert_eq!(tasks, N);
     }

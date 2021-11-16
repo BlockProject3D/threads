@@ -27,7 +27,15 @@
 // SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 use crossbeam::thread::{Scope, ScopedJoinHandle};
+use crate::Join;
 use super::core::ThreadManager;
+
+impl<'a> Join for ScopedJoinHandle<'a, ()>
+{
+    fn join(self) -> std::thread::Result<()> {
+        self.join()
+    }
+}
 
 pub struct ScopedThreadManager<'env, 'scope>(&'env Scope<'scope>);
 
@@ -84,11 +92,12 @@ mod tests
                     0
                 }
             });
-            while !pool.is_empty() {
-                if let Some(event) = pool.poll() {
-                    assert_eq!(event, 6765);
-                    tasks += 1;
-                }
+            assert!(!pool.is_empty());
+            pool.join().unwrap();
+            assert!(pool.is_empty());
+            while let Some(event) = pool.poll() {
+                assert_eq!(event, 6765);
+                tasks += 1;
             }
         }).unwrap();
         assert_eq!(tasks, N);

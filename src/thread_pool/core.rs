@@ -50,9 +50,14 @@ fn thread_pool_worker<T: Send>(tasks: Receiver<Task<T>>, out: Sender<T>)
     std::thread::sleep(Duration::from_millis(100));
 }
 
+pub trait Join
+{
+    fn join(self) -> std::thread::Result<()>;
+}
+
 pub trait ThreadManager<'env>
 {
-    type Handle;
+    type Handle : Join;
 
     fn spawn_thread<F: FnOnce() + Send + 'env>(&self, func: F) -> Self::Handle;
 }
@@ -127,7 +132,7 @@ impl<'env, T: Send, Manager: ThreadManager<'env>> ThreadPool<'env, T, Manager>
 
     pub fn is_empty(&self) -> bool
     {
-        self.task_channel_in.is_empty() && self.end_channel_in.is_empty() && self.running_threads == 0
+        self.task_channel_in.is_empty() && self.running_threads == 0
     }
 
     pub fn poll(&mut self) -> Option<T>
@@ -140,5 +145,17 @@ impl<'env, T: Send, Manager: ThreadManager<'env>> ThreadPool<'env, T, Manager>
             Ok(v) => Some(v),
             Err(_) => None
         }
+    }
+
+    pub fn join(&mut self) -> std::thread::Result<()>
+    {
+        for handle in self.threads.iter_mut() {
+            if let Some(h) = handle.take() {
+                h.join()?;
+                self.term_channel_out.recv();
+                self.running_threads -= 1;
+            }
+        }
+        Ok(())
     }
 }
