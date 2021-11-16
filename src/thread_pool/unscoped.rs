@@ -36,6 +36,7 @@ impl Join for JoinHandle<()> {
     }
 }
 
+/// Represents an UnscopedThreadManager (using low level std::thread::spawn).
 pub struct UnscopedThreadManager();
 
 impl Default for UnscopedThreadManager {
@@ -45,6 +46,21 @@ impl Default for UnscopedThreadManager {
 }
 
 impl UnscopedThreadManager {
+    /// Creates new UnscopedThreadManager.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use bp3d_threads::ThreadPool;
+    /// use bp3d_threads::UnscopedThreadManager;
+    /// let manager = UnscopedThreadManager::new();
+    /// let mut pool: ThreadPool<i32, UnscopedThreadManager> = ThreadPool::new(4);
+    /// assert!(pool.is_idle());
+    /// pool.dispatch(&manager, |_| 12);
+    /// assert!(!pool.is_idle());
+    /// pool.join().unwrap();
+    /// assert!(pool.is_idle());
+    /// ```
     pub fn new() -> Self {
         Self()
     }
@@ -80,9 +96,9 @@ mod tests {
         for _ in 0..N {
             pool.dispatch(&manager, |_| fibonacci_recursive(20));
         }
-        assert!(!pool.is_empty());
+        assert!(!pool.is_idle());
         pool.join().unwrap();
-        assert!(pool.is_empty());
+        assert!(pool.is_idle());
         let mut tasks = 0;
         while let Some(event) = pool.poll() {
             assert_eq!(event, 6765);

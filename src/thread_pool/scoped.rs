@@ -36,6 +36,7 @@ impl<'a> Join for ScopedJoinHandle<'a, ()> {
     }
 }
 
+/// Represents a ScopedThreadManager (to use with crossbeam::scope).
 pub struct ScopedThreadManager<'env, 'scope>(&'env Scope<'scope>);
 
 impl<'env, 'scope: 'env> ThreadManager<'scope> for ScopedThreadManager<'env, 'scope> {
@@ -47,6 +48,29 @@ impl<'env, 'scope: 'env> ThreadManager<'scope> for ScopedThreadManager<'env, 'sc
 }
 
 impl<'env, 'scope> ScopedThreadManager<'env, 'scope> {
+    /// Creates new ScopedThreadManager.
+    ///
+    /// # Arguments
+    ///
+    /// * `scope`: the [Scope](crossbeam::thread::Scope) to use.
+    ///
+    /// returns: ScopedThreadManager
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use bp3d_threads::ThreadPool;
+    /// use bp3d_threads::ScopedThreadManager;
+    /// crossbeam::scope(|scope| {
+    ///     let manager = ScopedThreadManager::new(scope);
+    ///     let mut pool: ThreadPool<i32, ScopedThreadManager> = ThreadPool::new(4);
+    ///     assert!(pool.is_idle());
+    ///     pool.dispatch(&manager, |_| 12);
+    ///     assert!(!pool.is_idle());
+    ///     pool.join().unwrap();
+    ///     assert!(pool.is_idle());
+    /// }).unwrap();
+    /// ```
     pub fn new(scope: &'env Scope<'scope>) -> Self {
         Self(scope)
     }
@@ -54,6 +78,7 @@ impl<'env, 'scope> ScopedThreadManager<'env, 'scope> {
 
 #[cfg(test)]
 mod tests {
+    use std::ops::Deref;
     use crate::thread_pool::{ScopedThreadManager, ThreadPool};
 
     fn fibonacci_recursive(n: usize) -> usize {
@@ -70,6 +95,7 @@ mod tests {
     fn basic() {
         const N: usize = 50;
         let mystr = String::from("This is a test");
+        let s = mystr.deref();
         let mut tasks = 0;
         crossbeam::scope(|scope| {
             let manager = ScopedThreadManager::new(scope);
@@ -78,15 +104,15 @@ mod tests {
                 pool.dispatch(&manager, |_| fibonacci_recursive(20));
             }
             pool.dispatch(&manager, |_| {
-                if mystr == "This is a test" {
+                if s == "This is a test" {
                     fibonacci_recursive(20)
                 } else {
                     0
                 }
             });
-            assert!(!pool.is_empty());
+            assert!(!pool.is_idle());
             pool.join().unwrap();
-            assert!(pool.is_empty());
+            assert!(pool.is_idle());
             while let Some(event) = pool.poll() {
                 assert_eq!(event, 6765);
                 tasks += 1;

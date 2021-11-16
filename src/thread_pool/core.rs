@@ -48,16 +48,29 @@ fn thread_pool_worker<T: Send>(tasks: Receiver<Task<T>>, out: Sender<T>) {
     std::thread::sleep(Duration::from_millis(100));
 }
 
+/// Trait to access the join function of a thread handle.
 pub trait Join {
+    /// Joins this thread.
     fn join(self) -> std::thread::Result<()>;
 }
 
+/// Trait to handle spawning generic threads.
 pub trait ThreadManager<'env> {
+
+    /// The type of thread handle (must have a join() function).
     type Handle: Join;
 
+    /// Spawns a thread using this manager.
+    ///
+    /// # Arguments
+    ///
+    /// * `func`: the function to run in the thread.
+    ///
+    /// returns: Self::Handle
     fn spawn_thread<F: FnOnce() + Send + 'env>(&self, func: F) -> Self::Handle;
 }
 
+/// Core thread pool.
 pub struct ThreadPool<'env, T: Send + 'static, Manager: ThreadManager<'env>> {
     end_channel_out: Receiver<T>,
     end_channel_in: Sender<T>,
@@ -72,6 +85,22 @@ pub struct ThreadPool<'env, T: Send + 'static, Manager: ThreadManager<'env>> {
 }
 
 impl<'env, T: Send, Manager: ThreadManager<'env>> ThreadPool<'env, T, Manager> {
+
+    /// Creates a new thread pool
+    ///
+    /// # Arguments
+    ///
+    /// * `n_threads`: maximum number of threads allowed to run at the same time.
+    ///
+    /// returns: ThreadPool<T, Manager>
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use bp3d_threads::UnscopedThreadManager;
+    /// use bp3d_threads::ThreadPool;
+    /// let _: ThreadPool<(), UnscopedThreadManager> = ThreadPool::new(4);
+    /// ```
     pub fn new(n_threads: usize) -> Self {
         let (end_channel_in, end_channel_out) = unbounded();
         let (task_channel_in, task_channel_out) = unbounded();
@@ -111,6 +140,31 @@ impl<'env, T: Send, Manager: ThreadManager<'env>> ThreadPool<'env, T, Manager> {
         }
     }
 
+    /// Schedule a new task to run.
+    ///
+    /// Returns true if the task was successfully scheduled, false otherwise.
+    ///
+    /// **The task execution order is not guaranteed,
+    /// however the task index is guaranteed to be the order of the call to dispatch.**
+    ///
+    /// **If a task panics it will leave a dead thread in the corresponding slot until .join() is called.**
+    ///
+    /// # Arguments
+    ///
+    /// * `manager`: the thread manager to spawn a new thread if needed.
+    /// * `f`: the task function to execute.
+    ///
+    /// returns: bool
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use bp3d_threads::UnscopedThreadManager;
+    /// use bp3d_threads::ThreadPool;
+    /// let manager = UnscopedThreadManager::new();
+    /// let mut pool: ThreadPool<(), UnscopedThreadManager> = ThreadPool::new(4);
+    /// pool.dispatch(&manager, |_| ());
+    /// ```
     pub fn dispatch<F: FnOnce(usize) -> T + Send + 'env>(
         &mut self,
         manager: &Manager,
@@ -128,10 +182,15 @@ impl<'env, T: Send, Manager: ThreadManager<'env>> ThreadPool<'env, T, Manager> {
         true
     }
 
-    pub fn is_empty(&self) -> bool {
+    /// Returns true if this thread pool is idle.
+    ///
+    /// **An idle thread pool does neither have running threads nor waiting tasks
+    /// but may still have waiting results to poll.**
+    pub fn is_idle(&self) -> bool {
         self.task_channel_in.is_empty() && self.running_threads == 0
     }
 
+    /// Poll a result from this thread pool if any, returns None if no result is available.
     pub fn poll(&mut self) -> Option<T> {
         if let Ok(v) = self.term_channel_out.try_recv() {
             self.threads[v] = None;
@@ -143,11 +202,18 @@ impl<'env, T: Send, Manager: ThreadManager<'env>> ThreadPool<'env, T, Manager> {
         }
     }
 
+    /// Waits for all tasks to finish execution and stops all threads.
+    ///
+    /// *Use this to periodically clean-up the thread pool, if you know that some tasks may panic.*
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if a thread did panic.
     pub fn join(&mut self) -> std::thread::Result<()> {
         for handle in self.threads.iter_mut() {
             if let Some(h) = handle.take() {
                 h.join()?;
-                let _ = self.term_channel_out.recv();
+                self.term_channel_out.recv().unwrap();
                 self.running_threads -= 1;
             }
         }
