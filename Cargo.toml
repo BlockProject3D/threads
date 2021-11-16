@@ -1,11 +1,11 @@
 [package]
 name = "bp3d-threads"
-version = "0.1.0"
+version = "1.0.0"
 authors = ["Yuri Edward <yuri6037@outlook.com>"]
 edition = "2021"
-description = ""
+description = "Yet another threading library intended to simplify thread pools in BP3D."
 license = "BSD-3-Clause"
-repository = "https://gitlab.com/bp3d/test"
+repository = "https://gitlab.com/bp3d/threads"
 readme = "./README.MD"
 keywords = ["threading", "thread", "pool"]
 categories = ["asynchronous"]

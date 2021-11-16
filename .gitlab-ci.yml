@@ -95,4 +95,4 @@ create-release:
     - echo "Creating release v${PACKAGE_VERSION}..."
     - |
       release-cli create --name "Release ${PACKAGE_VERSION}" --tag-name ${PACKAGE_VERSION} \
-        --assets-link "{\"name\":\"Crates.io release\",\"url\":\"https://crates.io/crates/bpx\"}" \
+        --assets-link "{\"name\":\"Crates.io release\",\"url\":\"https://crates.io/crates/bp3d-threads\"}" \
