@@ -26,10 +26,10 @@
 // NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
 // SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-//! Yet another threading library intended to simplify thread pools in BP3D.
+mod core;
+mod scoped;
+mod unscoped;
 
-#[warn(missing_docs)]
-
-mod thread_pool;
-
-pub use thread_pool::*;
+pub use self::core::*;
+pub use scoped::ScopedThreadManager;
+pub use unscoped::UnscopedThreadManager;
