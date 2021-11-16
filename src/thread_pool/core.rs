@@ -152,7 +152,7 @@ impl<'env, T: Send, Manager: ThreadManager<'env>> ThreadPool<'env, T, Manager>
         for handle in self.threads.iter_mut() {
             if let Some(h) = handle.take() {
                 h.join()?;
-                self.term_channel_out.recv();
+                let _ = self.term_channel_out.recv();
                 self.running_threads -= 1;
             }
         }
