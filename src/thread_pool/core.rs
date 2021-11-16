@@ -28,18 +28,16 @@
 
 //! A thread pool with support for function results
 
+use crossbeam_channel::{bounded, unbounded, Receiver, Sender};
 use std::iter::repeat_with;
 use std::time::Duration;
-use crossbeam_channel::{bounded, Receiver, Sender, unbounded};
 
-struct Task<'env, T: Send + 'static>
-{
+struct Task<'env, T: Send + 'static> {
     func: Box<dyn FnOnce(usize) -> T + Send + 'env>,
-    id: usize
+    id: usize,
 }
 
-fn thread_pool_worker<T: Send>(tasks: Receiver<Task<T>>, out: Sender<T>)
-{
+fn thread_pool_worker<T: Send>(tasks: Receiver<Task<T>>, out: Sender<T>) {
     while let Ok(v) = tasks.try_recv() {
         let res = (v.func)(v.id);
         if out.send(res).is_err() {
@@ -50,20 +48,17 @@ fn thread_pool_worker<T: Send>(tasks: Receiver<Task<T>>, out: Sender<T>)
     std::thread::sleep(Duration::from_millis(100));
 }
 
-pub trait Join
-{
+pub trait Join {
     fn join(self) -> std::thread::Result<()>;
 }
 
-pub trait ThreadManager<'env>
-{
-    type Handle : Join;
+pub trait ThreadManager<'env> {
+    type Handle: Join;
 
     fn spawn_thread<F: FnOnce() + Send + 'env>(&self, func: F) -> Self::Handle;
 }
 
-pub struct ThreadPool<'env, T: Send + 'static, Manager: ThreadManager<'env>>
-{
+pub struct ThreadPool<'env, T: Send + 'static, Manager: ThreadManager<'env>> {
     end_channel_out: Receiver<T>,
     end_channel_in: Sender<T>,
     task_channel_out: Receiver<Task<'env, T>>,
@@ -76,10 +71,8 @@ pub struct ThreadPool<'env, T: Send + 'static, Manager: ThreadManager<'env>>
     task_id: usize,
 }
 
-impl<'env, T: Send, Manager: ThreadManager<'env>> ThreadPool<'env, T, Manager>
-{
-    pub fn new(n_threads: usize) -> Self
-    {
+impl<'env, T: Send, Manager: ThreadManager<'env>> ThreadPool<'env, T, Manager> {
+    pub fn new(n_threads: usize) -> Self {
         let (end_channel_in, end_channel_out) = unbounded();
         let (task_channel_in, task_channel_out) = unbounded();
         let (term_channel_in, term_channel_out) = bounded(n_threads);
@@ -92,13 +85,15 @@ impl<'env, T: Send, Manager: ThreadManager<'env>> ThreadPool<'env, T, Manager>
             term_channel_in,
             n_threads,
             running_threads: 0,
-            threads: repeat_with(|| None).take(n_threads).collect::<Vec<Option<Manager::Handle>>>().into_boxed_slice(),
-            task_id: 0
+            threads: repeat_with(|| None)
+                .take(n_threads)
+                .collect::<Vec<Option<Manager::Handle>>>()
+                .into_boxed_slice(),
+            task_id: 0,
         }
     }
 
-    fn rearm_one_thread_if_possible(&mut self, manager: &Manager)
-    {
+    fn rearm_one_thread_if_possible(&mut self, manager: &Manager) {
         if self.running_threads < self.n_threads {
             for (i, handle) in self.threads.iter_mut().enumerate() {
                 if handle.is_none() {
@@ -116,11 +111,14 @@ impl<'env, T: Send, Manager: ThreadManager<'env>> ThreadPool<'env, T, Manager>
         }
     }
 
-    pub fn dispatch<F: FnOnce(usize) -> T + Send + 'env>(&mut self, manager: &Manager, f: F) -> bool
-    {
+    pub fn dispatch<F: FnOnce(usize) -> T + Send + 'env>(
+        &mut self,
+        manager: &Manager,
+        f: F,
+    ) -> bool {
         let task = Task {
             func: Box::new(f),
-            id: self.task_id
+            id: self.task_id,
         };
         if self.task_channel_in.send(task).is_err() {
             return false;
@@ -130,25 +128,22 @@ impl<'env, T: Send, Manager: ThreadManager<'env>> ThreadPool<'env, T, Manager>
         true
     }
 
-    pub fn is_empty(&self) -> bool
-    {
+    pub fn is_empty(&self) -> bool {
         self.task_channel_in.is_empty() && self.running_threads == 0
     }
 
-    pub fn poll(&mut self) -> Option<T>
-    {
+    pub fn poll(&mut self) -> Option<T> {
         if let Ok(v) = self.term_channel_out.try_recv() {
             self.threads[v] = None;
             self.running_threads -= 1;
         }
         match self.end_channel_out.try_recv() {
             Ok(v) => Some(v),
-            Err(_) => None
+            Err(_) => None,
         }
     }
 
-    pub fn join(&mut self) -> std::thread::Result<()>
-    {
+    pub fn join(&mut self) -> std::thread::Result<()> {
         for handle in self.threads.iter_mut() {
             if let Some(h) = handle.take() {
                 h.join()?;

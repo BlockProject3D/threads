@@ -26,53 +26,43 @@
 // NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
 // SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-use std::thread::JoinHandle;
-use crate::Join;
 use crate::thread_pool::core::ThreadManager;
+use crate::Join;
+use std::thread::JoinHandle;
 
-impl Join for JoinHandle<()>
-{
-    fn join(self) -> std::thread::Result<()>
-    {
+impl Join for JoinHandle<()> {
+    fn join(self) -> std::thread::Result<()> {
         self.join()
     }
 }
 
 pub struct UnscopedThreadManager();
 
-impl Default for UnscopedThreadManager
-{
-    fn default() -> Self
-    {
+impl Default for UnscopedThreadManager {
+    fn default() -> Self {
         Self::new()
     }
 }
 
-impl UnscopedThreadManager
-{
-    pub fn new() -> Self
-    {
+impl UnscopedThreadManager {
+    pub fn new() -> Self {
         Self()
     }
 }
 
-impl ThreadManager<'static> for UnscopedThreadManager
-{
+impl ThreadManager<'static> for UnscopedThreadManager {
     type Handle = JoinHandle<()>;
 
-    fn spawn_thread<F: FnOnce() + Send + 'static>(&self, func: F) -> Self::Handle
-    {
+    fn spawn_thread<F: FnOnce() + Send + 'static>(&self, func: F) -> Self::Handle {
         std::thread::spawn(func)
     }
 }
 
 #[cfg(test)]
-mod tests
-{
-    use crate::thread_pool::{UnscopedThreadManager, ThreadPool};
+mod tests {
+    use crate::thread_pool::{ThreadPool, UnscopedThreadManager};
 
-    fn fibonacci_recursive(n: usize) -> usize
-    {
+    fn fibonacci_recursive(n: usize) -> usize {
         if n == 0 {
             0
         } else if n == 1 {
@@ -83,8 +73,7 @@ mod tests
     }
 
     #[test]
-    fn basic()
-    {
+    fn basic() {
         const N: usize = 50;
         let manager = UnscopedThreadManager::new();
         let mut pool: ThreadPool<usize, UnscopedThreadManager> = ThreadPool::new(4);

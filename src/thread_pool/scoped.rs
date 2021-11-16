@@ -26,12 +26,11 @@
 // NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
 // SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-use crossbeam::thread::{Scope, ScopedJoinHandle};
-use crate::Join;
 use super::core::ThreadManager;
+use crate::Join;
+use crossbeam::thread::{Scope, ScopedJoinHandle};
 
-impl<'a> Join for ScopedJoinHandle<'a, ()>
-{
+impl<'a> Join for ScopedJoinHandle<'a, ()> {
     fn join(self) -> std::thread::Result<()> {
         self.join()
     }
@@ -39,31 +38,25 @@ impl<'a> Join for ScopedJoinHandle<'a, ()>
 
 pub struct ScopedThreadManager<'env, 'scope>(&'env Scope<'scope>);
 
-impl<'env, 'scope: 'env> ThreadManager<'scope> for ScopedThreadManager<'env, 'scope>
-{
+impl<'env, 'scope: 'env> ThreadManager<'scope> for ScopedThreadManager<'env, 'scope> {
     type Handle = ScopedJoinHandle<'env, ()>;
 
-    fn spawn_thread<F: FnOnce() + Send + 'scope>(&self, func: F) -> Self::Handle
-    {
+    fn spawn_thread<F: FnOnce() + Send + 'scope>(&self, func: F) -> Self::Handle {
         self.0.spawn(|_| func())
     }
 }
 
-impl<'env, 'scope> ScopedThreadManager<'env, 'scope>
-{
-    pub fn new(scope: &'env Scope<'scope>) -> Self
-    {
+impl<'env, 'scope> ScopedThreadManager<'env, 'scope> {
+    pub fn new(scope: &'env Scope<'scope>) -> Self {
         Self(scope)
     }
 }
 
 #[cfg(test)]
-mod tests
-{
+mod tests {
     use crate::thread_pool::{ScopedThreadManager, ThreadPool};
 
-    fn fibonacci_recursive(n: usize) -> usize
-    {
+    fn fibonacci_recursive(n: usize) -> usize {
         if n == 0 {
             0
         } else if n == 1 {
@@ -74,8 +67,7 @@ mod tests
     }
 
     #[test]
-    fn basic()
-    {
+    fn basic() {
         const N: usize = 50;
         let mystr = String::from("This is a test");
         let mut tasks = 0;
@@ -99,7 +91,8 @@ mod tests
                 assert_eq!(event, 6765);
                 tasks += 1;
             }
-        }).unwrap();
+        })
+        .unwrap();
         assert_eq!(tasks, N);
     }
 }
