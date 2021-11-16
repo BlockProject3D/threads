@@ -26,6 +26,10 @@
 // NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
 // SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-mod thread_pool;
+mod core;
+mod scoped;
+mod unscoped;
 
-pub use thread_pool::*;
+pub use self::core::*;
+pub use scoped::ScopedThreadManager;
+pub use unscoped::UnscopedThreadManager;

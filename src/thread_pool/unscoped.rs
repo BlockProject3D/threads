@@ -26,6 +26,71 @@
 // NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
 // SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-mod thread_pool;
+use std::thread::JoinHandle;
+use crate::thread_pool::core::ThreadManager;
 
-pub use thread_pool::*;
+pub struct UnscopedThreadManager
+{
+}
+
+impl Default for UnscopedThreadManager
+{
+    fn default() -> Self
+    {
+        Self::new()
+    }
+}
+
+impl UnscopedThreadManager
+{
+    pub fn new() -> Self
+    {
+        Self { }
+    }
+}
+
+impl ThreadManager<'static> for UnscopedThreadManager
+{
+    type Handle = JoinHandle<()>;
+
+    fn spawn_thread<F: FnOnce() + Send + 'static>(&self, func: F) -> Self::Handle
+    {
+        std::thread::spawn(func)
+    }
+}
+
+#[cfg(test)]
+mod tests
+{
+    use crate::thread_pool::{UnscopedThreadManager, ThreadPool};
+
+    fn fibonacci_recursive(n: usize) -> usize
+    {
+        if n == 0 {
+            0
+        } else if n == 1 {
+            1
+        } else {
+            fibonacci_recursive(n - 1) + fibonacci_recursive(n - 2)
+        }
+    }
+
+    #[test]
+    fn basic()
+    {
+        const N: usize = 50;
+        let manager = UnscopedThreadManager::new();
+        let mut pool: ThreadPool<usize, UnscopedThreadManager> = ThreadPool::new(4);
+        for _ in 0..N {
+            pool.dispatch(&manager, |_| fibonacci_recursive(20));
+        }
+        let mut tasks = 0;
+        while !pool.is_empty() {
+            if let Some(event) = pool.poll() {
+                assert_eq!(event, 6765);
+                tasks += 1;
+            }
+        }
+        assert_eq!(tasks, N);
+    }
+}

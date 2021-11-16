@@ -1,18 +1,19 @@
 [package]
-name = "test"
+name = "bp3d-threads"
 version = "0.1.0"
 authors = ["Yuri Edward <yuri6037@outlook.com>"]
-edition = "2018"
+edition = "2021"
 description = ""
 license = "BSD-3-Clause"
 repository = "https://gitlab.com/bp3d/test"
 readme = "./README.MD"
-keywords = []
-categories = []
+keywords = ["threading", "thread", "pool"]
+categories = ["asynchronous"]
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
+crossbeam = "0.8.1"
+crossbeam-channel = "0.5.1"
 
 [features]
-
