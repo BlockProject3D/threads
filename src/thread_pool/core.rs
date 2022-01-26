@@ -28,12 +28,12 @@
 
 //! A thread pool with support for function results
 
-use std::cell::Cell;
-use crossbeam_channel::{bounded, unbounded, Receiver, Sender};
+use crossbeam_channel::{bounded, Receiver, Sender};
 use std::iter::repeat_with;
 use std::sync::Arc;
 use std::time::Duration;
 use crossbeam::deque::{Injector, Stealer, Worker};
+use crossbeam::queue::SegQueue;
 
 const INNER_RESULT_BUFFER: usize = 16;
 
@@ -49,8 +49,7 @@ struct WorkThread<'env, T: Send + 'static>
     task_queue: Arc<Injector<Task<'env, T>>>,
     task_stealers: Box<[Option<Stealer<Task<'env, T>>>]>,
     term_channel_in: Sender<usize>,
-    end_channel_in: Sender<T>,
-    error_flag: Cell<bool>
+    end_queue: Arc<SegQueue<Vec<T>>>
 }
 
 impl<'env, T: Send + 'static> WorkThread<'env, T>
@@ -59,7 +58,7 @@ impl<'env, T: Send + 'static> WorkThread<'env, T>
                worker: Worker<Task<'env, T>>,
                task_stealers: Box<[Option<Stealer<Task<'env, T>>>]>,
                term_channel_in: Sender<usize>,
-               end_channel_in: Sender<T>) -> WorkThread<'env, T>
+               end_queue: Arc<SegQueue<Vec<T>>>) -> WorkThread<'env, T>
     {
         WorkThread {
             id,
@@ -67,8 +66,7 @@ impl<'env, T: Send + 'static> WorkThread<'env, T>
             task_queue,
             task_stealers,
             term_channel_in,
-            end_channel_in,
-            error_flag: Cell::new(false)
+            end_queue
         }
     }
 
@@ -93,10 +91,9 @@ impl<'env, T: Send + 'static> WorkThread<'env, T>
 
     fn empty_inner_buffer(&self, mut inner: Vec<T>) -> Vec<T>
     {
-        for res in std::mem::replace(&mut inner, Vec::with_capacity(INNER_RESULT_BUFFER)) {
-            if self.end_channel_in.send(res).is_err() {
-                self.error_flag.set(true);
-            }
+        if inner.len() > 0 {
+            let buffer = std::mem::replace(&mut inner, Vec::with_capacity(INNER_RESULT_BUFFER));
+            self.end_queue.push(buffer);
         }
         inner
     }
@@ -115,9 +112,6 @@ impl<'env, T: Send + 'static> WorkThread<'env, T>
             let res = (task.func)(task.id);
             inner.push(res);
             inner = self.check_empty_inner_buffer(inner);
-            if self.error_flag.get() {
-                break;
-            }
         }
         self.empty_inner_buffer(inner);
     }
@@ -125,10 +119,10 @@ impl<'env, T: Send + 'static> WorkThread<'env, T>
     fn main_loop(&self)
     {
         self.iteration();
-        if self.error_flag.get() {
+        /*if self.error_flag.get() {
             self.term_channel_in.send(self.id).unwrap();
             return;
-        }
+        }*/
         // Wait 100ms and give another try before shutting down to let a chance to the main thread to refill the task channel.
         std::thread::sleep(Duration::from_millis(100));
         self.iteration();
@@ -159,12 +153,12 @@ pub trait ThreadManager<'env> {
 
 /// Core thread pool.
 pub struct ThreadPool<'env, Manager: ThreadManager<'env>, T: Send + 'static> {
-    end_channel_out: Receiver<T>,
-    end_channel_in: Sender<T>,
     term_channel_out: Receiver<usize>,
     term_channel_in: Sender<usize>,
     task_queue: Arc<Injector<Task<'env, T>>>,
     task_stealers: Box<[Option<Stealer<Task<'env, T>>>]>,
+    end_queue: Arc<SegQueue<Vec<T>>>,
+    end_batch: Option<Vec<T>>,
     n_threads: usize,
     threads: Box<[Option<Manager::Handle>]>,
     running_threads: usize,
@@ -188,15 +182,14 @@ impl<'env, Manager: ThreadManager<'env>, T: Send> ThreadPool<'env, Manager, T> {
     /// let _: ThreadPool<UnscopedThreadManager, ()> = ThreadPool::new(4);
     /// ```
     pub fn new(n_threads: usize) -> Self {
-        let (end_channel_in, end_channel_out) = unbounded();
         let (term_channel_in, term_channel_out) = bounded(n_threads);
         Self {
-            end_channel_out,
-            end_channel_in,
             term_channel_out,
             term_channel_in,
             task_queue: Arc::new(Injector::new()),
             task_stealers: vec![None; n_threads].into_boxed_slice(),
+            end_queue: Arc::new(SegQueue::new()),
+            end_batch: None,
             n_threads,
             running_threads: 0,
             threads: repeat_with(|| None)
@@ -211,7 +204,6 @@ impl<'env, Manager: ThreadManager<'env>, T: Send> ThreadPool<'env, Manager, T> {
         if self.running_threads < self.n_threads {
             for (i, handle) in self.threads.iter_mut().enumerate() {
                 if handle.is_none() {
-                    let out = self.end_channel_in.clone();
                     let term = self.term_channel_in.clone();
                     let worker = Worker::new_fifo();
                     let stealer = worker.stealer();
@@ -219,6 +211,7 @@ impl<'env, Manager: ThreadManager<'env>, T: Send> ThreadPool<'env, Manager, T> {
                     // when Task doesn't have anything to do with the Manager or the Handle!
                     let rust_hack_1 = self.task_queue.clone();
                     let rust_hack_2 = self.task_stealers.clone();
+                    let rust_hack_3 = self.end_queue.clone();
                     self.task_stealers[i] = Some(stealer);
                     *handle = Some(manager.spawn_thread(move || {
                         let thread = WorkThread::new(i,
@@ -226,7 +219,7 @@ impl<'env, Manager: ThreadManager<'env>, T: Send> ThreadPool<'env, Manager, T> {
                                                      worker,
                                                      rust_hack_2,
                                                      term,
-                                                     out);
+                                                     rust_hack_3);
                         thread.main_loop()
                     }));
                     break;
@@ -293,10 +286,20 @@ impl<'env, Manager: ThreadManager<'env>, T: Send> ThreadPool<'env, Manager, T> {
             self.task_stealers[v] = None;
             self.running_threads -= 1;
         }
-        match self.end_channel_out.try_recv() {
-            Ok(v) => Some(v),
-            Err(_) => None,
+        if self.end_batch.is_none() {
+            self.end_batch = self.end_queue.pop();
         }
+        let value = match self.end_batch.as_mut() {
+            None => None,
+            Some(v) => {
+                let val = v.pop();
+                if v.len() == 0 {
+                    self.end_batch = None;
+                }
+                val
+            }
+        };
+        value
     }
 
     /// Waits for all tasks to finish execution and stops all threads.
