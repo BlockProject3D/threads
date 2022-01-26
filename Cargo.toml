@@ -1,6 +1,6 @@
 [package]
 name = "bp3d-threads"
-version = "1.0.0"
+version = "1.1.0"
 authors = ["Yuri Edward <yuri6037@outlook.com>"]
 edition = "2021"
 description = "Yet another threading library intended to simplify thread pools in BP3D."

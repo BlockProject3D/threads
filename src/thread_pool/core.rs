@@ -28,24 +28,112 @@
 
 //! A thread pool with support for function results
 
+use std::cell::Cell;
 use crossbeam_channel::{bounded, unbounded, Receiver, Sender};
 use std::iter::repeat_with;
+use std::sync::Arc;
 use std::time::Duration;
+use crossbeam::deque::{Injector, Stealer, Worker};
+
+const INNER_RESULT_BUFFER: usize = 16;
 
 struct Task<'env, T: Send + 'static> {
     func: Box<dyn FnOnce(usize) -> T + Send + 'env>,
     id: usize,
 }
 
-fn thread_pool_worker<T: Send>(tasks: Receiver<Task<T>>, out: Sender<T>) {
-    while let Ok(v) = tasks.try_recv() {
-        let res = (v.func)(v.id);
-        if out.send(res).is_err() {
-            break;
+struct WorkThread<'env, T: Send + 'static>
+{
+    id: usize,
+    worker: Worker<Task<'env, T>>,
+    task_queue: Arc<Injector<Task<'env, T>>>,
+    task_stealers: Box<[Option<Stealer<Task<'env, T>>>]>,
+    term_channel_in: Sender<usize>,
+    end_channel_in: Sender<T>,
+    error_flag: Cell<bool>
+}
+
+impl<'env, T: Send + 'static> WorkThread<'env, T>
+{
+    pub fn new(id: usize, task_queue: Arc<Injector<Task<'env, T>>>,
+               worker: Worker<Task<'env, T>>,
+               task_stealers: Box<[Option<Stealer<Task<'env, T>>>]>,
+               term_channel_in: Sender<usize>,
+               end_channel_in: Sender<T>) -> WorkThread<'env, T>
+    {
+        WorkThread {
+            id,
+            worker,
+            task_queue,
+            task_stealers,
+            term_channel_in,
+            end_channel_in,
+            error_flag: Cell::new(false)
         }
     }
-    // Wait 100ms before running the next iteration to let a chance to the main thread to refill the task channel.
-    std::thread::sleep(Duration::from_millis(100));
+
+    fn attempt_steal_task(&self) -> Option<Task<'env, T>> {
+        self.worker.pop().or_else(|| {
+            std::iter::repeat_with(|| {
+                self.task_queue.steal_batch_and_pop(&self.worker).or_else(|| {
+                    self.task_stealers.iter()
+                        .filter_map(|v| {
+                            if let Some(v) = v {
+                                Some(v)
+                            } else {
+                                None
+                            }
+                        })
+                        .map(|v| v.steal_batch_and_pop(&self.worker))
+                        .collect()
+                })
+            }).find(|v| !v.is_retry()).and_then(|v| v.success())
+        })
+    }
+
+    fn empty_inner_buffer(&self, mut inner: Vec<T>) -> Vec<T>
+    {
+        for res in std::mem::replace(&mut inner, Vec::with_capacity(INNER_RESULT_BUFFER)) {
+            if self.end_channel_in.send(res).is_err() {
+                self.error_flag.set(true);
+            }
+        }
+        inner
+    }
+
+    fn check_empty_inner_buffer(&self, mut inner: Vec<T>) -> Vec<T> {
+        if inner.len() >= INNER_RESULT_BUFFER {
+            inner = self.empty_inner_buffer(inner);
+        }
+        inner
+    }
+
+    fn iteration(&self)
+    {
+        let mut inner = Vec::with_capacity(INNER_RESULT_BUFFER);
+        while let Some(task) = self.attempt_steal_task() {
+            let res = (task.func)(task.id);
+            inner.push(res);
+            inner = self.check_empty_inner_buffer(inner);
+            if self.error_flag.get() {
+                break;
+            }
+        }
+        self.empty_inner_buffer(inner);
+    }
+
+    fn main_loop(&self)
+    {
+        self.iteration();
+        if self.error_flag.get() {
+            self.term_channel_in.send(self.id).unwrap();
+            return;
+        }
+        // Wait 100ms and give another try before shutting down to let a chance to the main thread to refill the task channel.
+        std::thread::sleep(Duration::from_millis(100));
+        self.iteration();
+        self.term_channel_in.send(self.id).unwrap();
+    }
 }
 
 /// Trait to access the join function of a thread handle.
@@ -73,10 +161,10 @@ pub trait ThreadManager<'env> {
 pub struct ThreadPool<'env, Manager: ThreadManager<'env>, T: Send + 'static> {
     end_channel_out: Receiver<T>,
     end_channel_in: Sender<T>,
-    task_channel_out: Receiver<Task<'env, T>>,
-    task_channel_in: Sender<Task<'env, T>>,
     term_channel_out: Receiver<usize>,
     term_channel_in: Sender<usize>,
+    task_queue: Arc<Injector<Task<'env, T>>>,
+    task_stealers: Box<[Option<Stealer<Task<'env, T>>>]>,
     n_threads: usize,
     threads: Box<[Option<Manager::Handle>]>,
     running_threads: usize,
@@ -101,15 +189,14 @@ impl<'env, Manager: ThreadManager<'env>, T: Send> ThreadPool<'env, Manager, T> {
     /// ```
     pub fn new(n_threads: usize) -> Self {
         let (end_channel_in, end_channel_out) = unbounded();
-        let (task_channel_in, task_channel_out) = unbounded();
         let (term_channel_in, term_channel_out) = bounded(n_threads);
         Self {
             end_channel_out,
             end_channel_in,
-            task_channel_out,
-            task_channel_in,
             term_channel_out,
             term_channel_in,
+            task_queue: Arc::new(Injector::new()),
+            task_stealers: vec![None; n_threads].into_boxed_slice(),
             n_threads,
             running_threads: 0,
             threads: repeat_with(|| None)
@@ -124,12 +211,23 @@ impl<'env, Manager: ThreadManager<'env>, T: Send> ThreadPool<'env, Manager, T> {
         if self.running_threads < self.n_threads {
             for (i, handle) in self.threads.iter_mut().enumerate() {
                 if handle.is_none() {
-                    let tasks = self.task_channel_out.clone();
                     let out = self.end_channel_in.clone();
                     let term = self.term_channel_in.clone();
+                    let worker = Worker::new_fifo();
+                    let stealer = worker.stealer();
+                    //Required due to a bug in rust: rust believes that Handle and Manager have to be Send
+                    // when Task doesn't have anything to do with the Manager or the Handle!
+                    let rust_hack_1 = self.task_queue.clone();
+                    let rust_hack_2 = self.task_stealers.clone();
+                    self.task_stealers[i] = Some(stealer);
                     *handle = Some(manager.spawn_thread(move || {
-                        thread_pool_worker(tasks, out);
-                        term.send(i).unwrap();
+                        let thread = WorkThread::new(i,
+                                                     rust_hack_1,
+                                                     worker,
+                                                     rust_hack_2,
+                                                     term,
+                                                     out);
+                        thread.main_loop()
                     }));
                     break;
                 }
@@ -141,6 +239,8 @@ impl<'env, Manager: ThreadManager<'env>, T: Send> ThreadPool<'env, Manager, T> {
     /// Schedule a new task to run.
     ///
     /// Returns true if the task was successfully scheduled, false otherwise.
+    ///
+    /// *NOTE: Since version 1.1.0, failure is no longer possible so this function will never return false.*
     ///
     /// **The task execution order is not guaranteed,
     /// however the task index is guaranteed to be the order of the call to dispatch.**
@@ -172,9 +272,7 @@ impl<'env, Manager: ThreadManager<'env>, T: Send> ThreadPool<'env, Manager, T> {
             func: Box::new(f),
             id: self.task_id,
         };
-        if self.task_channel_in.send(task).is_err() {
-            return false;
-        }
+        self.task_queue.push(task);
         self.task_id += 1;
         self.rearm_one_thread_if_possible(manager);
         true
@@ -185,13 +283,14 @@ impl<'env, Manager: ThreadManager<'env>, T: Send> ThreadPool<'env, Manager, T> {
     /// **An idle thread pool does neither have running threads nor waiting tasks
     /// but may still have waiting results to poll.**
     pub fn is_idle(&self) -> bool {
-        self.task_channel_in.is_empty() && self.running_threads == 0
+        self.task_queue.is_empty() && self.running_threads == 0
     }
 
     /// Poll a result from this thread pool if any, returns None if no result is available.
     pub fn poll(&mut self) -> Option<T> {
         if let Ok(v) = self.term_channel_out.try_recv() {
             self.threads[v] = None;
+            self.task_stealers[v] = None;
             self.running_threads -= 1;
         }
         match self.end_channel_out.try_recv() {
@@ -214,6 +313,9 @@ impl<'env, Manager: ThreadManager<'env>, T: Send> ThreadPool<'env, Manager, T> {
                 self.term_channel_out.recv().unwrap();
                 self.running_threads -= 1;
             }
+        }
+        for v in self.task_stealers.iter_mut() {
+            *v = None;
         }
         Ok(())
     }
