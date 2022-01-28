@@ -28,12 +28,11 @@
 
 //! A thread pool with support for function results
 
-use crossbeam_channel::{bounded, Receiver, Sender};
 use std::iter::repeat_with;
 use std::sync::Arc;
 use std::time::Duration;
 use crossbeam::deque::{Injector, Stealer, Worker};
-use crossbeam::queue::SegQueue;
+use crossbeam::queue::{ArrayQueue, SegQueue};
 
 const INNER_RESULT_BUFFER: usize = 16;
 
@@ -48,7 +47,7 @@ struct WorkThread<'env, T: Send + 'static>
     worker: Worker<Task<'env, T>>,
     task_queue: Arc<Injector<Task<'env, T>>>,
     task_stealers: Box<[Option<Stealer<Task<'env, T>>>]>,
-    term_channel_in: Sender<usize>,
+    term_queue: Arc<ArrayQueue<usize>>,
     end_queue: Arc<SegQueue<Vec<T>>>
 }
 
@@ -57,7 +56,7 @@ impl<'env, T: Send + 'static> WorkThread<'env, T>
     pub fn new(id: usize, task_queue: Arc<Injector<Task<'env, T>>>,
                worker: Worker<Task<'env, T>>,
                task_stealers: Box<[Option<Stealer<Task<'env, T>>>]>,
-               term_channel_in: Sender<usize>,
+               term_queue: Arc<ArrayQueue<usize>>,
                end_queue: Arc<SegQueue<Vec<T>>>) -> WorkThread<'env, T>
     {
         WorkThread {
@@ -65,7 +64,7 @@ impl<'env, T: Send + 'static> WorkThread<'env, T>
             worker,
             task_queue,
             task_stealers,
-            term_channel_in,
+            term_queue,
             end_queue
         }
     }
@@ -126,7 +125,7 @@ impl<'env, T: Send + 'static> WorkThread<'env, T>
         // Wait 100ms and give another try before shutting down to let a chance to the main thread to refill the task channel.
         std::thread::sleep(Duration::from_millis(100));
         self.iteration();
-        self.term_channel_in.send(self.id).unwrap();
+        self.term_queue.push(self.id).unwrap();
     }
 }
 
@@ -153,12 +152,11 @@ pub trait ThreadManager<'env> {
 
 /// Core thread pool.
 pub struct ThreadPool<'env, Manager: ThreadManager<'env>, T: Send + 'static> {
-    term_channel_out: Receiver<usize>,
-    term_channel_in: Sender<usize>,
     task_queue: Arc<Injector<Task<'env, T>>>,
     task_stealers: Box<[Option<Stealer<Task<'env, T>>>]>,
     end_queue: Arc<SegQueue<Vec<T>>>,
     end_batch: Option<Vec<T>>,
+    term_queue: Arc<ArrayQueue<usize>>,
     n_threads: usize,
     threads: Box<[Option<Manager::Handle>]>,
     running_threads: usize,
@@ -182,14 +180,12 @@ impl<'env, Manager: ThreadManager<'env>, T: Send> ThreadPool<'env, Manager, T> {
     /// let _: ThreadPool<UnscopedThreadManager, ()> = ThreadPool::new(4);
     /// ```
     pub fn new(n_threads: usize) -> Self {
-        let (term_channel_in, term_channel_out) = bounded(n_threads);
         Self {
-            term_channel_out,
-            term_channel_in,
             task_queue: Arc::new(Injector::new()),
             task_stealers: vec![None; n_threads].into_boxed_slice(),
             end_queue: Arc::new(SegQueue::new()),
             end_batch: None,
+            term_queue: Arc::new(ArrayQueue::new(n_threads)),
             n_threads,
             running_threads: 0,
             threads: repeat_with(|| None)
@@ -204,7 +200,6 @@ impl<'env, Manager: ThreadManager<'env>, T: Send> ThreadPool<'env, Manager, T> {
         if self.running_threads < self.n_threads {
             for (i, handle) in self.threads.iter_mut().enumerate() {
                 if handle.is_none() {
-                    let term = self.term_channel_in.clone();
                     let worker = Worker::new_fifo();
                     let stealer = worker.stealer();
                     //Required due to a bug in rust: rust believes that Handle and Manager have to be Send
@@ -212,13 +207,14 @@ impl<'env, Manager: ThreadManager<'env>, T: Send> ThreadPool<'env, Manager, T> {
                     let rust_hack_1 = self.task_queue.clone();
                     let rust_hack_2 = self.task_stealers.clone();
                     let rust_hack_3 = self.end_queue.clone();
+                    let rust_hack_4 = self.term_queue.clone();
                     self.task_stealers[i] = Some(stealer);
                     *handle = Some(manager.spawn_thread(move || {
                         let thread = WorkThread::new(i,
                                                      rust_hack_1,
                                                      worker,
                                                      rust_hack_2,
-                                                     term,
+                                                     rust_hack_4,
                                                      rust_hack_3);
                         thread.main_loop()
                     }));
@@ -281,7 +277,7 @@ impl<'env, Manager: ThreadManager<'env>, T: Send> ThreadPool<'env, Manager, T> {
 
     /// Poll a result from this thread pool if any, returns None if no result is available.
     pub fn poll(&mut self) -> Option<T> {
-        if let Ok(v) = self.term_channel_out.try_recv() {
+        if let Some(v) = self.term_queue.pop() {
             self.threads[v] = None;
             self.task_stealers[v] = None;
             self.running_threads -= 1;
@@ -313,7 +309,7 @@ impl<'env, Manager: ThreadManager<'env>, T: Send> ThreadPool<'env, Manager, T> {
         for handle in self.threads.iter_mut() {
             if let Some(h) = handle.take() {
                 h.join()?;
-                self.term_channel_out.recv().unwrap();
+                self.term_queue.pop();
                 self.running_threads -= 1;
             }
         }

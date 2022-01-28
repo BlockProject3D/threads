@@ -14,6 +14,5 @@ categories = ["asynchronous"]
 
 [dependencies]
 crossbeam = "0.8.1"
-crossbeam-channel = "0.5.1"
 
 [features]
