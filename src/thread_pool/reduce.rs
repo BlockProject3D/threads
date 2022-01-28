@@ -26,8 +26,6 @@
 // NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
 // SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-use std::ops::AddAssign;
-
 /// Simplify usage in map-reduce scenarios. Provides reduce function for any [AddAssign](std::ops::AddAssign).
 pub trait Reduce
 {
@@ -41,9 +39,74 @@ pub trait Reduce
     fn reduce(&mut self, other: Self);
 }
 
-impl<T: AddAssign> Reduce for T
-{
+impl Reduce for i8 {
     fn reduce(&mut self, other: Self) {
-        self.add_assign(other);
+        *self += other;
+    }
+}
+
+impl Reduce for i16 {
+    fn reduce(&mut self, other: Self) {
+        *self += other;
+    }
+}
+
+impl Reduce for i32 {
+    fn reduce(&mut self, other: Self) {
+        *self += other;
+    }
+}
+
+impl Reduce for i64 {
+    fn reduce(&mut self, other: Self) {
+        *self += other;
+    }
+}
+
+impl Reduce for u8 {
+    fn reduce(&mut self, other: Self) {
+        *self += other;
+    }
+}
+
+impl Reduce for u16 {
+    fn reduce(&mut self, other: Self) {
+        *self += other;
+    }
+}
+
+impl Reduce for u32 {
+    fn reduce(&mut self, other: Self) {
+        *self += other;
+    }
+}
+
+impl Reduce for u64 {
+    fn reduce(&mut self, other: Self) {
+        *self += other;
+    }
+}
+
+impl Reduce for f32 {
+    fn reduce(&mut self, other: Self) {
+        *self += other;
+    }
+}
+
+impl Reduce for f64 {
+    fn reduce(&mut self, other: Self) {
+        *self += other;
+    }
+}
+
+impl<T> Reduce for Vec<T> {
+    fn reduce(&mut self, other: Self) {
+        self.extend(other);
+    }
+}
+
+impl Reduce for () {
+    fn reduce(&mut self, _: Self) {
+        //return nothing as this means the reducer doesn't have anything to merge
     }
 }
