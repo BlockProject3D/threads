@@ -56,9 +56,9 @@ impl UnscopedThreadManager {
     /// let manager = UnscopedThreadManager::new();
     /// let mut pool: ThreadPool<UnscopedThreadManager, i32> = ThreadPool::new(4);
     /// assert!(pool.is_idle());
-    /// pool.dispatch(&manager, |_| 12);
+    /// pool.send(&manager, |_| 12);
     /// assert!(!pool.is_idle());
-    /// pool.join().unwrap();
+    /// pool.wait().unwrap();
     /// assert!(pool.is_idle());
     /// ```
     pub fn new() -> Self {

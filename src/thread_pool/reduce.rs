@@ -39,65 +39,19 @@ pub trait Reduce
     fn reduce(&mut self, other: Self);
 }
 
-impl Reduce for i8 {
-    fn reduce(&mut self, other: Self) {
-        *self += other;
-    }
+macro_rules! impl_reduce {
+    ($($t:ty)*) => {
+        $(
+            impl Reduce for $t {
+                fn reduce(&mut self, other: Self) {
+                    *self += other;
+                }
+            }
+        )*
+    };
 }
 
-impl Reduce for i16 {
-    fn reduce(&mut self, other: Self) {
-        *self += other;
-    }
-}
-
-impl Reduce for i32 {
-    fn reduce(&mut self, other: Self) {
-        *self += other;
-    }
-}
-
-impl Reduce for i64 {
-    fn reduce(&mut self, other: Self) {
-        *self += other;
-    }
-}
-
-impl Reduce for u8 {
-    fn reduce(&mut self, other: Self) {
-        *self += other;
-    }
-}
-
-impl Reduce for u16 {
-    fn reduce(&mut self, other: Self) {
-        *self += other;
-    }
-}
-
-impl Reduce for u32 {
-    fn reduce(&mut self, other: Self) {
-        *self += other;
-    }
-}
-
-impl Reduce for u64 {
-    fn reduce(&mut self, other: Self) {
-        *self += other;
-    }
-}
-
-impl Reduce for f32 {
-    fn reduce(&mut self, other: Self) {
-        *self += other;
-    }
-}
-
-impl Reduce for f64 {
-    fn reduce(&mut self, other: Self) {
-        *self += other;
-    }
-}
+impl_reduce!(i8 i16 i32 i64 u8 u16 u32 u64 isize usize i128 u128 f32 f64);
 
 impl<T> Reduce for Vec<T> {
     fn reduce(&mut self, other: Self) {
