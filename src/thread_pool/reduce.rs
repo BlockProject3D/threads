@@ -26,12 +26,24 @@
 // NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
 // SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-mod core;
-mod scoped;
-mod unscoped;
-mod reduce;
+use std::ops::AddAssign;
 
-pub use self::core::*;
-pub use self::reduce::*;
-pub use scoped::ScopedThreadManager;
-pub use unscoped::UnscopedThreadManager;
+/// Simplify usage in map-reduce scenarios. Provides reduce function for any [AddAssign](std::ops::AddAssign).
+pub trait Reduce
+{
+    /// Merges the current reduced result with a new result.
+    ///
+    /// # Arguments
+    ///
+    /// * `other`: the new result to merge in.
+    ///
+    /// returns: ()
+    fn reduce(&mut self, other: Self);
+}
+
+impl<T: AddAssign> Reduce for T
+{
+    fn reduce(&mut self, other: Self) {
+        self.add_assign(other);
+    }
+}

@@ -65,9 +65,9 @@ impl<'env, 'scope> ScopedThreadManager<'env, 'scope> {
     ///     let manager = ScopedThreadManager::new(scope);
     ///     let mut pool: ThreadPool<ScopedThreadManager, i32> = ThreadPool::new(4);
     ///     assert!(pool.is_idle());
-    ///     pool.dispatch(&manager, |_| 12);
+    ///     pool.send(&manager, |_| 12);
     ///     assert!(!pool.is_idle());
-    ///     pool.join().unwrap();
+    ///     pool.wait().unwrap();
     ///     assert!(pool.is_idle());
     /// }).unwrap();
     /// ```
@@ -101,9 +101,9 @@ mod tests {
             let manager = ScopedThreadManager::new(scope);
             let mut pool: ThreadPool<ScopedThreadManager, usize> = ThreadPool::new(4);
             for _ in 0..N - 1 {
-                pool.dispatch(&manager, |_| fibonacci_recursive(20));
+                pool.send(&manager, |_| fibonacci_recursive(20));
             }
-            pool.dispatch(&manager, |_| {
+            pool.send(&manager, |_| {
                 if s == "This is a test" {
                     fibonacci_recursive(20)
                 } else {
@@ -111,7 +111,7 @@ mod tests {
                 }
             });
             assert!(!pool.is_idle());
-            pool.join().unwrap();
+            pool.wait().unwrap();
             assert!(pool.is_idle());
             while let Some(event) = pool.poll() {
                 assert_eq!(event, 6765);

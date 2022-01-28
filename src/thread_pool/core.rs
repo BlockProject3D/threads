@@ -33,6 +33,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use crossbeam::deque::{Injector, Stealer, Worker};
 use crossbeam::queue::{ArrayQueue, SegQueue};
+use crate::Reduce;
 
 const INNER_RESULT_BUFFER: usize = 16;
 
@@ -225,6 +226,41 @@ impl<'env, Manager: ThreadManager<'env>, T: Send> ThreadPool<'env, Manager, T> {
         }
     }
 
+    /// Send a new task to the injector queue.
+    ///
+    /// **The task execution order is not guaranteed,
+    /// however the task index is guaranteed to be the order of the call to dispatch.**
+    ///
+    /// **If a task panics it will leave a dead thread in the corresponding slot until .wait() is called.**
+    ///
+    /// # Arguments
+    ///
+    /// * `manager`: the thread manager to spawn a new thread if needed.
+    /// * `f`: the task function to execute.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use bp3d_threads::UnscopedThreadManager;
+    /// use bp3d_threads::ThreadPool;
+    /// let manager = UnscopedThreadManager::new();
+    /// let mut pool: ThreadPool<UnscopedThreadManager, ()> = ThreadPool::new(4);
+    /// pool.send(&manager, |_| ());
+    /// ```
+    pub fn send<F: FnOnce(usize) -> T + Send + 'env>(
+        &mut self,
+        manager: &Manager,
+        f: F,
+    ) {
+        let task = Task {
+            func: Box::new(f),
+            id: self.task_id,
+        };
+        self.task_queue.push(task);
+        self.task_id += 1;
+        self.rearm_one_thread_if_possible(manager);
+    }
+
     /// Schedule a new task to run.
     ///
     /// Returns true if the task was successfully scheduled, false otherwise.
@@ -242,28 +278,13 @@ impl<'env, Manager: ThreadManager<'env>, T: Send> ThreadPool<'env, Manager, T> {
     /// * `f`: the task function to execute.
     ///
     /// returns: bool
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use bp3d_threads::UnscopedThreadManager;
-    /// use bp3d_threads::ThreadPool;
-    /// let manager = UnscopedThreadManager::new();
-    /// let mut pool: ThreadPool<UnscopedThreadManager, ()> = ThreadPool::new(4);
-    /// pool.dispatch(&manager, |_| ());
-    /// ```
+    #[deprecated(since="1.1.0", note="Please use `send` instead")]
     pub fn dispatch<F: FnOnce(usize) -> T + Send + 'env>(
         &mut self,
         manager: &Manager,
         f: F,
     ) -> bool {
-        let task = Task {
-            func: Box::new(f),
-            id: self.task_id,
-        };
-        self.task_queue.push(task);
-        self.task_id += 1;
-        self.rearm_one_thread_if_possible(manager);
+        self.send(manager, f);
         true
     }
 
@@ -298,6 +319,58 @@ impl<'env, Manager: ThreadManager<'env>, T: Send> ThreadPool<'env, Manager, T> {
         value
     }
 
+    /// Waits for all tasks to finish execution and stops all threads then returns all task results.
+    ///
+    /// *Use this to periodically clean-up the thread pool, if you know that some tasks may panic.*
+    ///
+    /// **Use this function in map-reduce kind of scenarios.**
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if a thread did panic.
+    pub fn reduce(&mut self) -> std::thread::Result<Vec<T>> {
+        let mut vec = Vec::new();
+        for i in 0..self.n_threads {
+            if let Some(h) = self.threads[i].take() {
+                h.join()?;
+                self.term_queue.pop();
+                self.running_threads -= 1;
+                while let Some(batch) = self.end_queue.pop() {
+                    vec.extend(batch);
+                }
+            }
+            self.task_stealers[i] = None;
+        }
+        Ok(vec)
+    }
+
+    /// Waits for all tasks to finish execution and stops all threads while running a reducer function for each result.
+    ///
+    /// *Use this to periodically clean-up the thread pool, if you know that some tasks may panic.*
+    ///
+    /// **Use this function in map-reduce kind of scenarios.**
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if a thread did panic.
+    pub fn reduce_with<R: Default + Reduce, F: FnMut(T) -> R>(&mut self, mut reducer: F) -> std::thread::Result<R> {
+        let mut r= R::default();
+        for i in 0..self.n_threads {
+            if let Some(h) = self.threads[i].take() {
+                h.join()?;
+                self.term_queue.pop();
+                self.running_threads -= 1;
+                while let Some(batch) = self.end_queue.pop() {
+                    for v in batch {
+                        r.reduce(reducer(v));
+                    }
+                }
+            }
+            self.task_stealers[i] = None;
+        }
+        Ok(r)
+    }
+
     /// Waits for all tasks to finish execution and stops all threads.
     ///
     /// *Use this to periodically clean-up the thread pool, if you know that some tasks may panic.*
@@ -305,16 +378,32 @@ impl<'env, Manager: ThreadManager<'env>, T: Send> ThreadPool<'env, Manager, T> {
     /// # Errors
     ///
     /// Returns an error if a thread did panic.
-    pub fn join(&mut self) -> std::thread::Result<()> {
-        for handle in self.threads.iter_mut() {
-            if let Some(h) = handle.take() {
+    pub fn wait(&mut self) -> std::thread::Result<()> {
+        for i in 0..self.n_threads {
+            if let Some(h) = self.threads[i].take() {
                 h.join()?;
                 self.term_queue.pop();
                 self.running_threads -= 1;
             }
+            self.task_stealers[i] = None;
         }
-        for v in self.task_stealers.iter_mut() {
-            *v = None;
+        Ok(())
+    }
+
+    /// Waits for all tasks to finish execution and stops all threads.
+    ///
+    /// *Use this to periodically clean-up the thread pool, if you know that some tasks may panic.*
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if a thread did panic.
+    #[deprecated(since="1.1.0", note="Please use `wait`, `reduce` or `reduce_with` instead")]
+    pub fn join(&mut self) -> std::thread::Result<()> {
+        let results = self.reduce()?;
+        if let Some(v) = &mut self.end_batch {
+            v.extend(results);
+        } else {
+            self.end_batch = Some(results);
         }
         Ok(())
     }
