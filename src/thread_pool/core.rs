@@ -371,6 +371,36 @@ impl<'env, Manager: ThreadManager<'env>, T: Send> ThreadPool<'env, Manager, T> {
         Ok(r)
     }
 
+    /// Waits for all tasks to finish execution and stops all threads while running a reducer function for each result.
+    ///
+    /// *Use this to periodically clean-up the thread pool, if you know that some tasks may panic.*
+    ///
+    /// **Use this function in map-reduce kind of scenarios.**
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if a thread did panic or that a reducer failed.
+    pub fn try_reduce_with<R: Default + Reduce, E, F: FnMut(T) -> Result<R, E>>(&mut self, mut reducer: F) -> std::thread::Result<Result<R, E>> {
+        let mut r= R::default();
+        for i in 0..self.n_threads {
+            if let Some(h) = self.threads[i].take() {
+                h.join()?;
+                self.term_queue.pop();
+                self.running_threads -= 1;
+                while let Some(batch) = self.end_queue.pop() {
+                    for v in batch {
+                        match reducer(v) {
+                            Ok(v) => r.reduce(v),
+                            Err(e) => return Ok(Err(e))
+                        }
+                    }
+                }
+            }
+            self.task_stealers[i] = None;
+        }
+        Ok(Ok(r))
+    }
+
     /// Waits for all tasks to finish execution and stops all threads.
     ///
     /// *Use this to periodically clean-up the thread pool, if you know that some tasks may panic.*
