@@ -56,9 +56,9 @@ impl UnscopedThreadManager {
     /// let manager = UnscopedThreadManager::new();
     /// let mut pool: ThreadPool<UnscopedThreadManager, i32> = ThreadPool::new(4);
     /// assert!(pool.is_idle());
-    /// pool.dispatch(&manager, |_| 12);
+    /// pool.send(&manager, |_| 12);
     /// assert!(!pool.is_idle());
-    /// pool.join().unwrap();
+    /// pool.wait().unwrap();
     /// assert!(pool.is_idle());
     /// ```
     pub fn new() -> Self {
@@ -94,10 +94,10 @@ mod tests {
         let manager = UnscopedThreadManager::new();
         let mut pool: ThreadPool<UnscopedThreadManager, usize> = ThreadPool::new(4);
         for _ in 0..N {
-            pool.dispatch(&manager, |_| fibonacci_recursive(20));
+            pool.send(&manager, |_| fibonacci_recursive(20));
         }
         assert!(!pool.is_idle());
-        pool.join().unwrap();
+        pool.wait().unwrap();
         assert!(pool.is_idle());
         let mut tasks = 0;
         while let Some(event) = pool.poll() {
@@ -105,5 +105,19 @@ mod tests {
             tasks += 1;
         }
         assert_eq!(tasks, N);
+    }
+
+    #[test]
+    fn reduce() {
+        const N: usize = 50;
+        let manager = UnscopedThreadManager::new();
+        let mut pool: ThreadPool<UnscopedThreadManager, usize> = ThreadPool::new(4);
+        for _ in 0..N {
+            pool.send(&manager, |_| fibonacci_recursive(20));
+        }
+        assert!(!pool.is_idle());
+        let tasks = pool.reduce().count();
+        assert_eq!(tasks, N);
+        assert!(pool.is_idle());
     }
 }
