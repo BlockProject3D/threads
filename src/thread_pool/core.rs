@@ -31,9 +31,9 @@
 use std::iter::repeat_with;
 use std::sync::Arc;
 use std::time::Duration;
+use std::vec::IntoIter;
 use crossbeam::deque::{Injector, Stealer, Worker};
 use crossbeam::queue::{ArrayQueue, SegQueue};
-use crate::Reduce;
 
 const INNER_RESULT_BUFFER: usize = 16;
 
@@ -151,20 +151,126 @@ pub trait ThreadManager<'env> {
     fn spawn_thread<F: FnOnce() + Send + 'env>(&self, func: F) -> Self::Handle;
 }
 
-/// Core thread pool.
-pub struct ThreadPool<'env, Manager: ThreadManager<'env>, T: Send + 'static> {
-    task_queue: Arc<Injector<Task<'env, T>>>,
-    task_stealers: Box<[Option<Stealer<Task<'env, T>>>]>,
+struct Inner<'env, M: ThreadManager<'env>, T: Send + 'static> {
     end_queue: Arc<SegQueue<Vec<T>>>,
-    end_batch: Option<Vec<T>>,
+    threads: Box<[Option<M::Handle>]>,
+    task_stealers: Box<[Option<Stealer<Task<'env, T>>>]>,
     term_queue: Arc<ArrayQueue<usize>>,
-    n_threads: usize,
-    threads: Box<[Option<Manager::Handle>]>,
     running_threads: usize,
+    n_threads: usize
+}
+
+/// An iterator into a thread pool.
+pub struct Iter<'a, 'env, M: ThreadManager<'env>, T: Send + 'static> {
+    inner: &'a mut Inner<'env, M, T>,
+    batch: Option<IntoIter<T>>,
+    thread_id: usize
+}
+
+impl<'a, 'env, M: ThreadManager<'env>, T: Send + 'static> Iter<'a, 'env, M, T> {
+    fn pump_next_batch(&mut self) -> Option<std::thread::Result<()>> {
+        while self.batch.is_none() {
+            if self.inner.running_threads == 0 {
+                return None;
+            }
+            if let Some(h) = self.inner.threads[self.thread_id].take() {
+                if let Err(e) = h.join() {
+                    return Some(Err(e));
+                }
+                self.inner.term_queue.pop();
+                self.inner.running_threads -= 1;
+                while let Some(batch) = self.inner.end_queue.pop() {
+                    self.batch = Some(batch.into_iter());
+                }
+            }
+            self.inner.task_stealers[self.thread_id] = None;
+            self.thread_id += 1;
+        }
+        Some(Ok(()))
+    }
+}
+
+impl<'a, 'env, M: ThreadManager<'env>, T: Send + 'static> Iter<'a, 'env, M, Vec<T>> {
+    /// Collect this iterator into a single [Vec](std::vec::Vec) when each task returns a
+    /// [Vec](std::vec::Vec).
+    pub fn to_vec(mut self) -> std::thread::Result<Vec<T>> {
+        let mut v = Vec::new();
+        for i in 0..self.inner.n_threads {
+            if let Some(h) = self.inner.threads[i].take() {
+                h.join()?;
+                self.inner.term_queue.pop();
+                self.inner.running_threads -= 1;
+                while let Some(batch) = self.inner.end_queue.pop() {
+                    for r in batch {
+                        v.extend(r);
+                    }
+                }
+            }
+            self.inner.task_stealers[i] = None;
+        }
+        Ok(v)
+    }
+}
+
+impl<'a, 'env, M: ThreadManager<'env>, T: Send + 'static, E: Send + 'static> Iter<'a, 'env, M, Result<Vec<T>, E>> {
+    /// Collect this iterator into a single [Result](std::result::Result) of [Vec](std::vec::Vec)
+    /// when each task returns a [Result](std::result::Result) of [Vec](std::vec::Vec).
+    pub fn to_vec(mut self) -> std::thread::Result<Result<Vec<T>, E>> {
+        let mut v = Vec::new();
+        for i in 0..self.inner.n_threads {
+            if let Some(h) = self.inner.threads[i].take() {
+                h.join()?;
+                self.inner.term_queue.pop();
+                self.inner.running_threads -= 1;
+                while let Some(batch) = self.inner.end_queue.pop() {
+                    for r in batch {
+                        match r {
+                            Ok(items) => v.extend(items),
+                            Err(e) => return Ok(Err(e))
+                        }
+                    }
+                }
+            }
+            self.inner.task_stealers[i] = None;
+        }
+        Ok(Ok(v))
+    }
+}
+
+impl<'a, 'env, M: ThreadManager<'env>, T: Send + 'static> Iterator for Iter<'a, 'env, M, T> {
+    type Item = std::thread::Result<T>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        match self.pump_next_batch() {
+            None => return None,
+            Some(v) => match v {
+                Ok(_) => (),
+                Err(e) => return Some(Err(e))
+            }
+        };
+        // SAFETY: always safe because while self.batch.is_none(). So if this is reached then
+        // batch has to be Some.
+        let batch = unsafe { self.batch.as_mut().unwrap_unchecked() };
+        let item = batch.next();
+        match item {
+            None => {
+                self.batch = None;
+                self.next()
+            },
+            Some(v) => Some(Ok(v))
+        }
+    }
+}
+
+/// Core thread pool.
+pub struct ThreadPool<'env, M: ThreadManager<'env>, T: Send + 'static> {
+    task_queue: Arc<Injector<Task<'env, T>>>,
+    end_batch: Option<Vec<T>>,
+    inner: Inner<'env, M, T>,
     task_id: usize,
 }
 
-impl<'env, Manager: ThreadManager<'env>, T: Send> ThreadPool<'env, Manager, T> {
+impl<'env, M: ThreadManager<'env>, T: Send> ThreadPool<'env, M, T> {
     /// Creates a new thread pool
     ///
     /// # Arguments
@@ -183,33 +289,35 @@ impl<'env, Manager: ThreadManager<'env>, T: Send> ThreadPool<'env, Manager, T> {
     pub fn new(n_threads: usize) -> Self {
         Self {
             task_queue: Arc::new(Injector::new()),
-            task_stealers: vec![None; n_threads].into_boxed_slice(),
-            end_queue: Arc::new(SegQueue::new()),
+            inner: Inner {
+                task_stealers: vec![None; n_threads].into_boxed_slice(),
+                end_queue: Arc::new(SegQueue::new()),
+                term_queue: Arc::new(ArrayQueue::new(n_threads)),
+                n_threads,
+                running_threads: 0,
+                threads: repeat_with(|| None)
+                    .take(n_threads)
+                    .collect::<Vec<Option<M::Handle>>>()
+                    .into_boxed_slice(),
+            },
             end_batch: None,
-            term_queue: Arc::new(ArrayQueue::new(n_threads)),
-            n_threads,
-            running_threads: 0,
-            threads: repeat_with(|| None)
-                .take(n_threads)
-                .collect::<Vec<Option<Manager::Handle>>>()
-                .into_boxed_slice(),
             task_id: 0,
         }
     }
 
-    fn rearm_one_thread_if_possible(&mut self, manager: &Manager) {
-        if self.running_threads < self.n_threads {
-            for (i, handle) in self.threads.iter_mut().enumerate() {
+    fn rearm_one_thread_if_possible(&mut self, manager: &M) {
+        if self.inner.running_threads < self.inner.n_threads {
+            for (i, handle) in self.inner.threads.iter_mut().enumerate() {
                 if handle.is_none() {
                     let worker = Worker::new_fifo();
                     let stealer = worker.stealer();
                     //Required due to a bug in rust: rust believes that Handle and Manager have to be Send
                     // when Task doesn't have anything to do with the Manager or the Handle!
                     let rust_hack_1 = self.task_queue.clone();
-                    let rust_hack_2 = self.task_stealers.clone();
-                    let rust_hack_3 = self.end_queue.clone();
-                    let rust_hack_4 = self.term_queue.clone();
-                    self.task_stealers[i] = Some(stealer);
+                    let rust_hack_2 = self.inner.task_stealers.clone();
+                    let rust_hack_3 = self.inner.end_queue.clone();
+                    let rust_hack_4 = self.inner.term_queue.clone();
+                    self.inner.task_stealers[i] = Some(stealer);
                     *handle = Some(manager.spawn_thread(move || {
                         let thread = WorkThread::new(i,
                                                      rust_hack_1,
@@ -222,7 +330,7 @@ impl<'env, Manager: ThreadManager<'env>, T: Send> ThreadPool<'env, Manager, T> {
                     break;
                 }
             }
-            self.running_threads += 1;
+            self.inner.running_threads += 1;
         }
     }
 
@@ -249,7 +357,7 @@ impl<'env, Manager: ThreadManager<'env>, T: Send> ThreadPool<'env, Manager, T> {
     /// ```
     pub fn send<F: FnOnce(usize) -> T + Send + 'env>(
         &mut self,
-        manager: &Manager,
+        manager: &M,
         f: F,
     ) {
         let task = Task {
@@ -281,7 +389,7 @@ impl<'env, Manager: ThreadManager<'env>, T: Send> ThreadPool<'env, Manager, T> {
     #[deprecated(since="1.1.0", note="Please use `send` instead")]
     pub fn dispatch<F: FnOnce(usize) -> T + Send + 'env>(
         &mut self,
-        manager: &Manager,
+        manager: &M,
         f: F,
     ) -> bool {
         self.send(manager, f);
@@ -293,18 +401,18 @@ impl<'env, Manager: ThreadManager<'env>, T: Send> ThreadPool<'env, Manager, T> {
     /// **An idle thread pool does neither have running threads nor waiting tasks
     /// but may still have waiting results to poll.**
     pub fn is_idle(&self) -> bool {
-        self.task_queue.is_empty() && self.running_threads == 0
+        self.task_queue.is_empty() && self.inner.running_threads == 0
     }
 
     /// Poll a result from this thread pool if any, returns None if no result is available.
     pub fn poll(&mut self) -> Option<T> {
-        if let Some(v) = self.term_queue.pop() {
-            self.threads[v] = None;
-            self.task_stealers[v] = None;
-            self.running_threads -= 1;
+        if let Some(v) = self.inner.term_queue.pop() {
+            self.inner.threads[v] = None;
+            self.inner.task_stealers[v] = None;
+            self.inner.running_threads -= 1;
         }
         if self.end_batch.is_none() {
-            self.end_batch = self.end_queue.pop();
+            self.end_batch = self.inner.end_queue.pop();
         }
         let value = match self.end_batch.as_mut() {
             None => None,
@@ -319,7 +427,8 @@ impl<'env, Manager: ThreadManager<'env>, T: Send> ThreadPool<'env, Manager, T> {
         value
     }
 
-    /// Waits for all tasks to finish execution and stops all threads then returns all task results.
+    /// Waits for all tasks to finish execution and stops all threads while iterating over task
+    /// results.
     ///
     /// *Use this to periodically clean-up the thread pool, if you know that some tasks may panic.*
     ///
@@ -328,77 +437,12 @@ impl<'env, Manager: ThreadManager<'env>, T: Send> ThreadPool<'env, Manager, T> {
     /// # Errors
     ///
     /// Returns an error if a thread did panic.
-    pub fn reduce(&mut self) -> std::thread::Result<Vec<T>> {
-        let mut vec = Vec::new();
-        for i in 0..self.n_threads {
-            if let Some(h) = self.threads[i].take() {
-                h.join()?;
-                self.term_queue.pop();
-                self.running_threads -= 1;
-                while let Some(batch) = self.end_queue.pop() {
-                    vec.extend(batch);
-                }
-            }
-            self.task_stealers[i] = None;
+    pub fn reduce(&mut self) -> Iter<'_, 'env, M, T> {
+        Iter {
+            inner: &mut self.inner,
+            batch: None,
+            thread_id: 0
         }
-        Ok(vec)
-    }
-
-    /// Waits for all tasks to finish execution and stops all threads while running a reducer function for each result.
-    ///
-    /// *Use this to periodically clean-up the thread pool, if you know that some tasks may panic.*
-    ///
-    /// **Use this function in map-reduce kind of scenarios.**
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if a thread did panic.
-    pub fn reduce_with<R: Default + Reduce, F: FnMut(T) -> R>(&mut self, mut reducer: F) -> std::thread::Result<R> {
-        let mut r= R::default();
-        for i in 0..self.n_threads {
-            if let Some(h) = self.threads[i].take() {
-                h.join()?;
-                self.term_queue.pop();
-                self.running_threads -= 1;
-                while let Some(batch) = self.end_queue.pop() {
-                    for v in batch {
-                        r.reduce(reducer(v));
-                    }
-                }
-            }
-            self.task_stealers[i] = None;
-        }
-        Ok(r)
-    }
-
-    /// Waits for all tasks to finish execution and stops all threads while running a reducer function for each result.
-    ///
-    /// *Use this to periodically clean-up the thread pool, if you know that some tasks may panic.*
-    ///
-    /// **Use this function in map-reduce kind of scenarios.**
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if a thread did panic or that a reducer failed.
-    pub fn try_reduce_with<R: Default + Reduce, E, F: FnMut(T) -> Result<R, E>>(&mut self, mut reducer: F) -> std::thread::Result<Result<R, E>> {
-        let mut r= R::default();
-        for i in 0..self.n_threads {
-            if let Some(h) = self.threads[i].take() {
-                h.join()?;
-                self.term_queue.pop();
-                self.running_threads -= 1;
-                while let Some(batch) = self.end_queue.pop() {
-                    for v in batch {
-                        match reducer(v) {
-                            Ok(v) => r.reduce(v),
-                            Err(e) => return Ok(Err(e))
-                        }
-                    }
-                }
-            }
-            self.task_stealers[i] = None;
-        }
-        Ok(Ok(r))
     }
 
     /// Waits for all tasks to finish execution and stops all threads.
@@ -409,13 +453,13 @@ impl<'env, Manager: ThreadManager<'env>, T: Send> ThreadPool<'env, Manager, T> {
     ///
     /// Returns an error if a thread did panic.
     pub fn wait(&mut self) -> std::thread::Result<()> {
-        for i in 0..self.n_threads {
-            if let Some(h) = self.threads[i].take() {
+        for i in 0..self.inner.n_threads {
+            if let Some(h) = self.inner.threads[i].take() {
                 h.join()?;
-                self.term_queue.pop();
-                self.running_threads -= 1;
+                self.inner.term_queue.pop();
+                self.inner.running_threads -= 1;
             }
-            self.task_stealers[i] = None;
+            self.inner.task_stealers[i] = None;
         }
         Ok(())
     }
@@ -427,14 +471,8 @@ impl<'env, Manager: ThreadManager<'env>, T: Send> ThreadPool<'env, Manager, T> {
     /// # Errors
     ///
     /// Returns an error if a thread did panic.
-    #[deprecated(since="1.1.0", note="Please use `wait`, `reduce` or `reduce_with` instead")]
+    #[deprecated(since="1.1.0", note="Please use `wait` or `reduce` instead")]
     pub fn join(&mut self) -> std::thread::Result<()> {
-        let results = self.reduce()?;
-        if let Some(v) = &mut self.end_batch {
-            v.extend(results);
-        } else {
-            self.end_batch = Some(results);
-        }
-        Ok(())
+        self.wait()
     }
 }

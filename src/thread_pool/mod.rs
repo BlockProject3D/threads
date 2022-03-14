@@ -29,9 +29,7 @@
 mod core;
 mod scoped;
 mod unscoped;
-mod reduce;
 
 pub use self::core::*;
-pub use self::reduce::*;
 pub use scoped::ScopedThreadManager;
 pub use unscoped::UnscopedThreadManager;
