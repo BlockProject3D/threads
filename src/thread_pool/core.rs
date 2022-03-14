@@ -28,12 +28,12 @@
 
 //! A thread pool with support for function results
 
+use crossbeam::deque::{Injector, Stealer, Worker};
+use crossbeam::queue::{ArrayQueue, SegQueue};
 use std::iter::repeat_with;
 use std::sync::Arc;
 use std::time::Duration;
 use std::vec::IntoIter;
-use crossbeam::deque::{Injector, Stealer, Worker};
-use crossbeam::queue::{ArrayQueue, SegQueue};
 
 const INNER_RESULT_BUFFER: usize = 16;
 
@@ -42,55 +42,53 @@ struct Task<'env, T: Send + 'static> {
     id: usize,
 }
 
-struct WorkThread<'env, T: Send + 'static>
-{
+struct WorkThread<'env, T: Send + 'static> {
     id: usize,
     worker: Worker<Task<'env, T>>,
     task_queue: Arc<Injector<Task<'env, T>>>,
     task_stealers: Box<[Option<Stealer<Task<'env, T>>>]>,
     term_queue: Arc<ArrayQueue<usize>>,
-    end_queue: Arc<SegQueue<Vec<T>>>
+    end_queue: Arc<SegQueue<Vec<T>>>,
 }
 
-impl<'env, T: Send + 'static> WorkThread<'env, T>
-{
-    pub fn new(id: usize, task_queue: Arc<Injector<Task<'env, T>>>,
-               worker: Worker<Task<'env, T>>,
-               task_stealers: Box<[Option<Stealer<Task<'env, T>>>]>,
-               term_queue: Arc<ArrayQueue<usize>>,
-               end_queue: Arc<SegQueue<Vec<T>>>) -> WorkThread<'env, T>
-    {
+impl<'env, T: Send + 'static> WorkThread<'env, T> {
+    pub fn new(
+        id: usize,
+        task_queue: Arc<Injector<Task<'env, T>>>,
+        worker: Worker<Task<'env, T>>,
+        task_stealers: Box<[Option<Stealer<Task<'env, T>>>]>,
+        term_queue: Arc<ArrayQueue<usize>>,
+        end_queue: Arc<SegQueue<Vec<T>>>,
+    ) -> WorkThread<'env, T> {
         WorkThread {
             id,
             worker,
             task_queue,
             task_stealers,
             term_queue,
-            end_queue
+            end_queue,
         }
     }
 
     fn attempt_steal_task(&self) -> Option<Task<'env, T>> {
         self.worker.pop().or_else(|| {
             std::iter::repeat_with(|| {
-                self.task_queue.steal_batch_and_pop(&self.worker).or_else(|| {
-                    self.task_stealers.iter()
-                        .filter_map(|v| {
-                            if let Some(v) = v {
-                                Some(v)
-                            } else {
-                                None
-                            }
-                        })
-                        .map(|v| v.steal_batch_and_pop(&self.worker))
-                        .collect()
-                })
-            }).find(|v| !v.is_retry()).and_then(|v| v.success())
+                self.task_queue
+                    .steal_batch_and_pop(&self.worker)
+                    .or_else(|| {
+                        self.task_stealers
+                            .iter()
+                            .filter_map(|v| if let Some(v) = v { Some(v) } else { None })
+                            .map(|v| v.steal_batch_and_pop(&self.worker))
+                            .collect()
+                    })
+            })
+            .find(|v| !v.is_retry())
+            .and_then(|v| v.success())
         })
     }
 
-    fn empty_inner_buffer(&self, mut inner: Vec<T>) -> Vec<T>
-    {
+    fn empty_inner_buffer(&self, mut inner: Vec<T>) -> Vec<T> {
         if !inner.is_empty() {
             let buffer = std::mem::replace(&mut inner, Vec::with_capacity(INNER_RESULT_BUFFER));
             self.end_queue.push(buffer);
@@ -105,8 +103,7 @@ impl<'env, T: Send + 'static> WorkThread<'env, T>
         inner
     }
 
-    fn iteration(&self)
-    {
+    fn iteration(&self) {
         let mut inner = Vec::with_capacity(INNER_RESULT_BUFFER);
         while let Some(task) = self.attempt_steal_task() {
             let res = (task.func)(task.id);
@@ -116,8 +113,7 @@ impl<'env, T: Send + 'static> WorkThread<'env, T>
         self.empty_inner_buffer(inner);
     }
 
-    fn main_loop(&self)
-    {
+    fn main_loop(&self) {
         self.iteration();
         /*if self.error_flag.get() {
             self.term_channel_in.send(self.id).unwrap();
@@ -157,14 +153,14 @@ struct Inner<'env, M: ThreadManager<'env>, T: Send + 'static> {
     task_stealers: Box<[Option<Stealer<Task<'env, T>>>]>,
     term_queue: Arc<ArrayQueue<usize>>,
     running_threads: usize,
-    n_threads: usize
+    n_threads: usize,
 }
 
 /// An iterator into a thread pool.
 pub struct Iter<'a, 'env, M: ThreadManager<'env>, T: Send + 'static> {
     inner: &'a mut Inner<'env, M, T>,
     batch: Option<IntoIter<T>>,
-    thread_id: usize
+    thread_id: usize,
 }
 
 impl<'a, 'env, M: ThreadManager<'env>, T: Send + 'static> Iter<'a, 'env, M, T> {
@@ -212,7 +208,9 @@ impl<'a, 'env, M: ThreadManager<'env>, T: Send + 'static> Iter<'a, 'env, M, Vec<
     }
 }
 
-impl<'a, 'env, M: ThreadManager<'env>, T: Send + 'static, E: Send + 'static> Iter<'a, 'env, M, Result<Vec<T>, E>> {
+impl<'a, 'env, M: ThreadManager<'env>, T: Send + 'static, E: Send + 'static>
+    Iter<'a, 'env, M, Result<Vec<T>, E>>
+{
     /// Collect this iterator into a single [Result](std::result::Result) of [Vec](std::vec::Vec)
     /// when each task returns a [Result](std::result::Result) of [Vec](std::vec::Vec).
     pub fn to_vec(mut self) -> std::thread::Result<Result<Vec<T>, E>> {
@@ -226,7 +224,7 @@ impl<'a, 'env, M: ThreadManager<'env>, T: Send + 'static, E: Send + 'static> Ite
                     for r in batch {
                         match r {
                             Ok(items) => v.extend(items),
-                            Err(e) => return Ok(Err(e))
+                            Err(e) => return Ok(Err(e)),
                         }
                     }
                 }
@@ -245,8 +243,8 @@ impl<'a, 'env, M: ThreadManager<'env>, T: Send + 'static> Iterator for Iter<'a, 
             None => return None,
             Some(v) => match v {
                 Ok(_) => (),
-                Err(e) => return Some(Err(e))
-            }
+                Err(e) => return Some(Err(e)),
+            },
         };
         // SAFETY: always safe because while self.batch.is_none(). So if this is reached then
         // batch has to be Some.
@@ -256,8 +254,8 @@ impl<'a, 'env, M: ThreadManager<'env>, T: Send + 'static> Iterator for Iter<'a, 
             None => {
                 self.batch = None;
                 self.next()
-            },
-            Some(v) => Some(Ok(v))
+            }
+            Some(v) => Some(Ok(v)),
         }
     }
 }
@@ -311,20 +309,22 @@ impl<'env, M: ThreadManager<'env>, T: Send> ThreadPool<'env, M, T> {
                 if handle.is_none() {
                     let worker = Worker::new_fifo();
                     let stealer = worker.stealer();
-                    //Required due to a bug in rust: rust believes that Handle and Manager have to be Send
-                    // when Task doesn't have anything to do with the Manager or the Handle!
+                    // Required due to a bug in rust: rust believes that Handle and Manager have to
+                    // be Send when Task doesn't have anything to do with the Manager or the Handle!
                     let rust_hack_1 = self.task_queue.clone();
                     let rust_hack_2 = self.inner.task_stealers.clone();
                     let rust_hack_3 = self.inner.end_queue.clone();
                     let rust_hack_4 = self.inner.term_queue.clone();
                     self.inner.task_stealers[i] = Some(stealer);
                     *handle = Some(manager.spawn_thread(move || {
-                        let thread = WorkThread::new(i,
-                                                     rust_hack_1,
-                                                     worker,
-                                                     rust_hack_2,
-                                                     rust_hack_4,
-                                                     rust_hack_3);
+                        let thread = WorkThread::new(
+                            i,
+                            rust_hack_1,
+                            worker,
+                            rust_hack_2,
+                            rust_hack_4,
+                            rust_hack_3,
+                        );
                         thread.main_loop()
                     }));
                     break;
@@ -355,11 +355,7 @@ impl<'env, M: ThreadManager<'env>, T: Send> ThreadPool<'env, M, T> {
     /// let mut pool: ThreadPool<UnscopedThreadManager, ()> = ThreadPool::new(4);
     /// pool.send(&manager, |_| ());
     /// ```
-    pub fn send<F: FnOnce(usize) -> T + Send + 'env>(
-        &mut self,
-        manager: &M,
-        f: F,
-    ) {
+    pub fn send<F: FnOnce(usize) -> T + Send + 'env>(&mut self, manager: &M, f: F) {
         let task = Task {
             func: Box::new(f),
             id: self.task_id,
@@ -386,12 +382,8 @@ impl<'env, M: ThreadManager<'env>, T: Send> ThreadPool<'env, M, T> {
     /// * `f`: the task function to execute.
     ///
     /// returns: bool
-    #[deprecated(since="1.1.0", note="Please use `send` instead")]
-    pub fn dispatch<F: FnOnce(usize) -> T + Send + 'env>(
-        &mut self,
-        manager: &M,
-        f: F,
-    ) -> bool {
+    #[deprecated(since = "1.1.0", note = "Please use `send` instead")]
+    pub fn dispatch<F: FnOnce(usize) -> T + Send + 'env>(&mut self, manager: &M, f: F) -> bool {
         self.send(manager, f);
         true
     }
@@ -441,7 +433,7 @@ impl<'env, M: ThreadManager<'env>, T: Send> ThreadPool<'env, M, T> {
         Iter {
             inner: &mut self.inner,
             batch: None,
-            thread_id: 0
+            thread_id: 0,
         }
     }
 
@@ -471,7 +463,7 @@ impl<'env, M: ThreadManager<'env>, T: Send> ThreadPool<'env, M, T> {
     /// # Errors
     ///
     /// Returns an error if a thread did panic.
-    #[deprecated(since="1.1.0", note="Please use `wait` or `reduce` instead")]
+    #[deprecated(since = "1.1.0", note = "Please use `wait` or `reduce` instead")]
     pub fn join(&mut self) -> std::thread::Result<()> {
         self.wait()
     }
