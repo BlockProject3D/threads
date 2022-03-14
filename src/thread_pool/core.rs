@@ -91,7 +91,7 @@ impl<'env, T: Send + 'static> WorkThread<'env, T>
 
     fn empty_inner_buffer(&self, mut inner: Vec<T>) -> Vec<T>
     {
-        if inner.len() > 0 {
+        if !inner.is_empty() {
             let buffer = std::mem::replace(&mut inner, Vec::with_capacity(INNER_RESULT_BUFFER));
             self.end_queue.push(buffer);
         }
@@ -418,7 +418,7 @@ impl<'env, M: ThreadManager<'env>, T: Send> ThreadPool<'env, M, T> {
             None => None,
             Some(v) => {
                 let val = v.pop();
-                if v.len() == 0 {
+                if v.is_empty() {
                     self.end_batch = None;
                 }
                 val
