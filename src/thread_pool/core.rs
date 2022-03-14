@@ -175,9 +175,12 @@ impl<'a, 'env, M: ThreadManager<'env>, T: Send + 'static> Iter<'a, 'env, M, T> {
                 }
                 self.inner.term_queue.pop();
                 self.inner.running_threads -= 1;
+                let mut megabatch = Vec::new();
                 while let Some(batch) = self.inner.end_queue.pop() {
-                    self.batch = Some(batch.into_iter());
+                    megabatch.extend(batch);
                 }
+                self.batch = Some(megabatch.into_iter());
+                return Some(Ok(()));
             }
             self.inner.task_stealers[self.thread_id] = None;
             self.thread_id += 1;

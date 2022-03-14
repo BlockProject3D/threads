@@ -106,4 +106,18 @@ mod tests {
         }
         assert_eq!(tasks, N);
     }
+
+    #[test]
+    fn reduce() {
+        const N: usize = 50;
+        let manager = UnscopedThreadManager::new();
+        let mut pool: ThreadPool<UnscopedThreadManager, usize> = ThreadPool::new(4);
+        for _ in 0..N {
+            pool.send(&manager, |_| fibonacci_recursive(20));
+        }
+        assert!(!pool.is_idle());
+        let tasks = pool.reduce().count();
+        assert_eq!(tasks, N);
+        assert!(pool.is_idle());
+    }
 }
