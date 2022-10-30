@@ -1,7 +1,0 @@
-include:
-    - project: bp3d/cargo-gitlab
-      file: lib-template.yml
-
-variables:
-    PROJECT_NAME: BP3D Threads
-    CRATE_NAME: bp3d-threads
