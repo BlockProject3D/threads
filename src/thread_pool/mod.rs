@@ -27,9 +27,14 @@
 // SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 mod core;
-mod scoped;
 mod unscoped;
-
+mod scoped;
 pub use self::core::*;
-pub use scoped::ScopedThreadManager;
+
 pub use unscoped::UnscopedThreadManager;
+pub use scoped::ScopedThreadManager;
+
+#[cfg(feature = "crossbeam-scopes")]
+mod crossbeam_scopes;
+#[cfg(feature = "crossbeam-scopes")]
+pub use crossbeam_scopes::CrossbeamScopedThreadManager;

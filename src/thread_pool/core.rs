@@ -28,8 +28,8 @@
 
 //! A thread pool with support for function results
 
-use crossbeam::deque::{Injector, Stealer, Worker};
-use crossbeam::queue::{ArrayQueue, SegQueue};
+use crossbeam_deque::{Injector, Stealer, Worker};
+use crossbeam_queue::{ArrayQueue, SegQueue};
 use std::iter::repeat_with;
 use std::sync::Arc;
 use std::time::Duration;
@@ -72,7 +72,7 @@ impl<'env, T: Send + 'static> WorkThread<'env, T> {
 
     fn attempt_steal_task(&self) -> Option<Task<'env, T>> {
         self.worker.pop().or_else(|| {
-            std::iter::repeat_with(|| {
+            repeat_with(|| {
                 self.task_queue
                     .steal_batch_and_pop(&self.worker)
                     .or_else(|| {
@@ -190,8 +190,8 @@ impl<'a, 'env, M: ThreadManager<'env>, T: Send + 'static> Iter<'a, 'env, M, T> {
 }
 
 impl<'a, 'env, M: ThreadManager<'env>, T: Send + 'static> Iter<'a, 'env, M, Vec<T>> {
-    /// Collect this iterator into a single [Vec](std::vec::Vec) when each task returns a
-    /// [Vec](std::vec::Vec).
+    /// Collect this iterator into a single [Vec](Vec) when each task returns a
+    /// [Vec](Vec).
     pub fn to_vec(mut self) -> std::thread::Result<Vec<T>> {
         let mut v = Vec::new();
         for i in 0..self.inner.n_threads {
@@ -214,8 +214,8 @@ impl<'a, 'env, M: ThreadManager<'env>, T: Send + 'static> Iter<'a, 'env, M, Vec<
 impl<'a, 'env, M: ThreadManager<'env>, T: Send + 'static, E: Send + 'static>
     Iter<'a, 'env, M, Result<Vec<T>, E>>
 {
-    /// Collect this iterator into a single [Result](std::result::Result) of [Vec](std::vec::Vec)
-    /// when each task returns a [Result](std::result::Result) of [Vec](std::vec::Vec).
+    /// Collect this iterator into a single [Result](Result) of [Vec](Vec)
+    /// when each task returns a [Result](Result) of [Vec](Vec).
     pub fn to_vec(mut self) -> std::thread::Result<Result<Vec<T>, E>> {
         let mut v = Vec::new();
         for i in 0..self.inner.n_threads {

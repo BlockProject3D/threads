@@ -28,7 +28,7 @@
 
 use super::core::ThreadManager;
 use crate::Join;
-use std::thread::{Scope, ScopedJoinHandle};
+use crossbeam::thread::{Scope, ScopedJoinHandle};
 
 impl<'a> Join for ScopedJoinHandle<'a, ()> {
     fn join(self) -> std::thread::Result<()> {
@@ -37,17 +37,17 @@ impl<'a> Join for ScopedJoinHandle<'a, ()> {
 }
 
 /// Represents a ScopedThreadManager (to use with crossbeam::scope).
-pub struct ScopedThreadManager<'a, 'scope, 'env>(&'a Scope<'scope, 'env>);
+pub struct CrossbeamScopedThreadManager<'env, 'scope>(&'env Scope<'scope>);
 
-impl<'a: 'scope, 'scope, 'env: 'scope> ThreadManager<'env> for ScopedThreadManager<'a, 'scope, 'env> {
-    type Handle = ScopedJoinHandle<'a, ()>;
+impl<'env, 'scope: 'env> ThreadManager<'scope> for CrossbeamScopedThreadManager<'env, 'scope> {
+    type Handle = ScopedJoinHandle<'env, ()>;
 
-    fn spawn_thread<F: FnOnce() + Send + 'env>(&self, func: F) -> Self::Handle {
-        self.0.spawn(|| func())
+    fn spawn_thread<F: FnOnce() + Send + 'scope>(&self, func: F) -> Self::Handle {
+        self.0.spawn(|_| func())
     }
 }
 
-impl<'a, 'scope, 'env: 'scope> ScopedThreadManager<'a, 'scope, 'env> {
+impl<'env, 'scope> CrossbeamScopedThreadManager<'env, 'scope> {
     /// Creates new ScopedThreadManager.
     ///
     /// # Arguments
@@ -60,25 +60,25 @@ impl<'a, 'scope, 'env: 'scope> ScopedThreadManager<'a, 'scope, 'env> {
     ///
     /// ```
     /// use bp3d_threads::ThreadPool;
-    /// use bp3d_threads::ScopedThreadManager;
-    /// std::thread::scope(|scope| {
-    ///     let manager = ScopedThreadManager::new(scope);
-    ///     let mut pool: ThreadPool<ScopedThreadManager, i32> = ThreadPool::new(4);
+    /// use bp3d_threads::CrossbeamScopedThreadManager;
+    /// crossbeam::scope(|scope| {
+    ///     let manager = CrossbeamScopedThreadManager::new(scope);
+    ///     let mut pool: ThreadPool<CrossbeamScopedThreadManager, i32> = ThreadPool::new(4);
     ///     assert!(pool.is_idle());
     ///     pool.send(&manager, |_| 12);
     ///     assert!(!pool.is_idle());
     ///     pool.wait().unwrap();
     ///     assert!(pool.is_idle());
-    /// });
+    /// }).unwrap();
     /// ```
-    pub fn new(scope: &'a Scope<'scope, 'env>) -> Self {
+    pub fn new(scope: &'env Scope<'scope>) -> Self {
         Self(scope)
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use crate::thread_pool::{ScopedThreadManager, ThreadPool};
+    use crate::thread_pool::{CrossbeamScopedThreadManager, ThreadPool};
     use std::ops::Deref;
 
     fn fibonacci_recursive(n: usize) -> usize {
@@ -97,9 +97,9 @@ mod tests {
         let mystr = String::from("This is a test");
         let s = mystr.deref();
         let mut tasks = 0;
-        std::thread::scope(|scope| {
-            let manager = ScopedThreadManager::new(scope);
-            let mut pool: ThreadPool<ScopedThreadManager, usize> = ThreadPool::new(4);
+        crossbeam::scope(|scope| {
+            let manager = CrossbeamScopedThreadManager::new(scope);
+            let mut pool: ThreadPool<CrossbeamScopedThreadManager, usize> = ThreadPool::new(4);
             for _ in 0..N - 1 {
                 pool.send(&manager, |_| fibonacci_recursive(20));
             }
@@ -117,7 +117,8 @@ mod tests {
                 assert_eq!(event, 6765);
                 tasks += 1;
             }
-        });
+        })
+        .unwrap();
         assert_eq!(tasks, N);
     }
 }
