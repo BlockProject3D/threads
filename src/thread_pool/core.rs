@@ -368,29 +368,6 @@ impl<'env, M: ThreadManager<'env>, T: Send> ThreadPool<'env, M, T> {
         self.rearm_one_thread_if_possible(manager);
     }
 
-    /// Schedule a new task to run.
-    ///
-    /// Returns true if the task was successfully scheduled, false otherwise.
-    ///
-    /// *NOTE: Since version 1.1.0, failure is no longer possible so this function will never return false.*
-    ///
-    /// **The task execution order is not guaranteed,
-    /// however the task index is guaranteed to be the order of the call to dispatch.**
-    ///
-    /// **If a task panics it will leave a dead thread in the corresponding slot until .join() is called.**
-    ///
-    /// # Arguments
-    ///
-    /// * `manager`: the thread manager to spawn a new thread if needed.
-    /// * `f`: the task function to execute.
-    ///
-    /// returns: bool
-    #[deprecated(since = "1.1.0", note = "Please use `send` instead")]
-    pub fn dispatch<F: FnOnce(usize) -> T + Send + 'env>(&mut self, manager: &M, f: F) -> bool {
-        self.send(manager, f);
-        true
-    }
-
     /// Returns true if this thread pool is idle.
     ///
     /// **An idle thread pool does neither have running threads nor waiting tasks
