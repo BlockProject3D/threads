@@ -39,7 +39,9 @@ impl<'a> Join for ScopedJoinHandle<'a, ()> {
 /// Represents a ScopedThreadManager (to use with crossbeam::scope).
 pub struct ScopedThreadManager<'a, 'scope, 'env>(&'a Scope<'scope, 'env>);
 
-impl<'a: 'scope, 'scope, 'env: 'scope> ThreadManager<'env> for ScopedThreadManager<'a, 'scope, 'env> {
+impl<'a: 'scope, 'scope, 'env: 'scope> ThreadManager<'env>
+    for ScopedThreadManager<'a, 'scope, 'env>
+{
     type Handle = ScopedJoinHandle<'a, ()>;
 
     fn spawn_thread<F: FnOnce() + Send + 'env>(&self, func: F) -> Self::Handle {

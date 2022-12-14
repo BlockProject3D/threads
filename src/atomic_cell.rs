@@ -26,9 +26,12 @@
 // NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
 // SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-use std::sync::atomic::{AtomicBool, AtomicI16, AtomicI32, AtomicI64, AtomicI8, AtomicIsize, AtomicU16, AtomicU32, AtomicU64, AtomicUsize};
 use std::sync::atomic::AtomicU8;
 use std::sync::atomic::Ordering;
+use std::sync::atomic::{
+    AtomicBool, AtomicI16, AtomicI32, AtomicI64, AtomicI8, AtomicIsize, AtomicU16, AtomicU32,
+    AtomicU64, AtomicUsize,
+};
 
 /// Represents any type which can be used in an AtomicCell (ex: i8, u8, etc).
 ///
@@ -145,7 +148,7 @@ impl Atomic for f64 {
 /// A type of cell which only stores atomic values.
 /// It provides the same basic get and set operations as a [Cell](std::cell::Cell).
 pub struct AtomicCell<T: Atomic> {
-    inner: T::Atomic
+    inner: T::Atomic,
 }
 
 impl<T: Atomic + Default> Default for AtomicCell<T> {
@@ -155,7 +158,6 @@ impl<T: Atomic + Default> Default for AtomicCell<T> {
 }
 
 impl<T: Atomic> AtomicCell<T> {
-
     /// Creates a new AtomicCell with a value.
     ///
     /// # Arguments
@@ -172,7 +174,7 @@ impl<T: Atomic> AtomicCell<T> {
     /// ```
     pub fn new(value: T) -> AtomicCell<T> {
         AtomicCell {
-            inner: T::atomic_new(value)
+            inner: T::atomic_new(value),
         }
     }
 
