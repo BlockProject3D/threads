@@ -3,7 +3,7 @@ name = "bp3d-threads"
 version = "2.0.0"
 authors = ["Yuri Edward <yuri6037@outlook.com>"]
 edition = "2021"
-description = "Yet another threading library intended to simplify thread pools in BP3D."
+description = "Yet another threading library intended to simplify concurrency in BP3D."
 license = "BSD-3-Clause"
 repository = "https://gitlab.com/bp3d/threads"
 readme = "./README.MD"
@@ -19,4 +19,5 @@ crossbeam-queue = { version = "0.3.8", optional = true }
 
 [features]
 thread-pool = ["crossbeam-deque", "crossbeam-queue"]
+atomic-cell = []
 crossbeam-scopes = ["crossbeam"]
