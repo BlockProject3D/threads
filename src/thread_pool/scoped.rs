@@ -45,7 +45,7 @@ impl<'a: 'scope, 'scope, 'env: 'scope> ThreadManager<'env>
     type Handle = ScopedJoinHandle<'a, ()>;
 
     fn spawn_thread<F: FnOnce() + Send + 'env>(&self, func: F) -> Self::Handle {
-        self.0.spawn(|| func())
+        self.0.spawn(func)
     }
 }
 
