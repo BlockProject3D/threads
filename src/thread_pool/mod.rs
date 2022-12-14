@@ -29,7 +29,12 @@
 mod core;
 mod scoped;
 mod unscoped;
-
 pub use self::core::*;
+
 pub use scoped::ScopedThreadManager;
 pub use unscoped::UnscopedThreadManager;
+
+#[cfg(feature = "crossbeam-scopes")]
+mod crossbeam_scopes;
+#[cfg(feature = "crossbeam-scopes")]
+pub use crossbeam_scopes::CrossbeamScopedThreadManager;

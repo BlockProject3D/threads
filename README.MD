@@ -10,3 +10,4 @@ Features:
 - Tasks can share immutable context (scoped thread pool).
 - Tasks are given their dispatch index when called.
 - Dispatch index is always guaranteed to match the order of calls to the dispatch function.
+- Atomic cells

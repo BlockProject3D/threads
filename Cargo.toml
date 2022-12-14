@@ -1,9 +1,9 @@
 [package]
 name = "bp3d-threads"
-version = "1.1.0"
+version = "2.0.0-pre.1.0.0"
 authors = ["Yuri Edward <yuri6037@outlook.com>"]
 edition = "2021"
-description = "Yet another threading library intended to simplify thread pools in BP3D."
+description = "Yet another threading library intended to simplify concurrency in BP3D."
 license = "BSD-3-Clause"
 repository = "https://gitlab.com/bp3d/threads"
 readme = "./README.MD"
@@ -13,6 +13,11 @@ categories = ["asynchronous"]
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-crossbeam = "0.8.1"
+crossbeam = { version = "0.8.1", optional = true }
+crossbeam-deque = { version = "0.8.2", optional = true }
+crossbeam-queue = { version = "0.3.8", optional = true }
 
 [features]
+thread-pool = ["crossbeam-deque", "crossbeam-queue"]
+atomic-cell = []
+crossbeam-scopes = ["crossbeam"]
