@@ -111,18 +111,15 @@ impl Atomic for f32 {
     type Atomic = AtomicU32;
 
     fn atomic_new(value: Self) -> Self::Atomic {
-        //SAFETY: We don't care whatever value it is, we just want the binary representation of
-        // the float as a U32 (32 bits)
-        unsafe { Self::Atomic::new(std::mem::transmute(value)) }
+        Self::Atomic::new(value.to_bits())
     }
 
     fn atomic_set(atomic: &Self::Atomic, value: Self) {
-        unsafe { atomic.store(std::mem::transmute(value), Ordering::Release) }
+        atomic.store(value.to_bits(), Ordering::Release)
     }
 
     fn atomic_get(atomic: &Self::Atomic) -> Self {
-        let val = atomic.load(Ordering::Acquire);
-        unsafe { std::mem::transmute(val) }
+        f32::from_bits(atomic.load(Ordering::Acquire))
     }
 }
 
@@ -130,18 +127,15 @@ impl Atomic for f64 {
     type Atomic = AtomicU64;
 
     fn atomic_new(value: Self) -> Self::Atomic {
-        //SAFETY: We don't care whatever value it is, we just want the binary representation of
-        // the float as a U64 (64 bits)
-        unsafe { Self::Atomic::new(std::mem::transmute(value)) }
+        Self::Atomic::new(value.to_bits())
     }
 
     fn atomic_set(atomic: &Self::Atomic, value: Self) {
-        unsafe { atomic.store(std::mem::transmute(value), Ordering::Release) }
+        atomic.store(value.to_bits(), Ordering::Release)
     }
 
     fn atomic_get(atomic: &Self::Atomic) -> Self {
-        let val = atomic.load(Ordering::Acquire);
-        unsafe { std::mem::transmute(val) }
+        f64::from_bits(atomic.load(Ordering::Acquire))
     }
 }
 
