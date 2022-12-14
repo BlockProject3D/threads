@@ -1,6 +1,6 @@
 [package]
 name = "bp3d-threads"
-version = "2.0.0"
+version = "2.0.0-pre.1.0.0"
 authors = ["Yuri Edward <yuri6037@outlook.com>"]
 edition = "2021"
 description = "Yet another threading library intended to simplify concurrency in BP3D."
